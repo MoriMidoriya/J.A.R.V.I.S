@@ -2,7 +2,19 @@
 
 from __future__ import annotations
 
+import sys
+import warnings
+
 import typer
+
+# Windows consoles default to a legacy codepage; make unicode glyphs safe everywhere (also when piped).
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, AttributeError):
+            pass
+warnings.filterwarnings("ignore", category=SyntaxWarning)  # pywinauto ships an old regex literal
 
 app = typer.Typer(help="J.A.R.V.I.S. — voice-first local AI assistant.", no_args_is_help=False, add_completion=False)
 

@@ -19,6 +19,7 @@ llm:
   request_timeout_s: 60
   ollama_base_url: http://127.0.0.1:11434
   ollama_num_ctx: 8192
+  ollama_keep_alive: 30m           # keep the model loaded in VRAM between turns
   max_tool_rounds: 6
 
 stt:

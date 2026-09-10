@@ -149,16 +149,16 @@ def check_ollama(r: Report) -> None:
 def check_everything(r: Report) -> None:
     s = get_settings()
     exe = Path(s.tools.everything_path)
-    running = False
+    r.add("Everything (file index)", exe.exists(), str(exe), "winget install voidtools.Everything", warn=not exe.exists())
     try:
-        import psutil
+        from jarvis.tools import everything
 
-        running = any(p.name().lower().startswith("everything") for p in psutil.process_iter(["name"]))
-    except Exception:  # noqa: BLE001
-        pass
-    r.add("Everything (file index)", exe.exists(), f"{exe} | running={running}", "winget install voidtools.Everything", warn=not exe.exists())
+        ipc = everything.ipc_ready()
+        r.add("  Everything IPC instance", ipc, "running" if ipc else "not running (Jarvis auto-starts it on first search)", warn=not ipc)
+    except Exception as e:  # noqa: BLE001
+        r.add("  Everything IPC instance", False, str(e), warn=True)
     dll = MODELS_DIR / "everything" / "Everything64.dll"
-    r.add("  Everything SDK dll", dll.exists(), str(dll), "auto-downloaded on first `jarvis run` (Phase 3)", warn=not dll.exists())
+    r.add("  Everything SDK dll", dll.exists(), str(dll), "auto-downloaded on first search", warn=not dll.exists())
 
 
 def check_espeak(r: Report) -> None:

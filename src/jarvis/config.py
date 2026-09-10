@@ -41,6 +41,7 @@ class LLMCfg(BaseModel):
     request_timeout_s: float = 60
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_num_ctx: int = 8192
+    ollama_keep_alive: str = "30m"
     max_tool_rounds: int = 6
 
 
