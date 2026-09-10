@@ -1,0 +1,66 @@
+# J.A.R.V.I.S. settings. Any value can be overridden via env var JARVIS__SECTION__KEY (see .env.example).
+
+assistant:
+  name: Jarvis
+  user_title: sir
+  user_name: Mori
+  wake_word: hey_jarvis          # openWakeWord pre-trained model name, or path to a custom .onnx
+  wake_threshold: 0.5
+  hot_window_seconds: 8          # after Jarvis replies, listen for follow-ups without the wake word
+  language: en
+
+llm:
+  primary: ollama/qwen3:14b      # any LiteLLM model string
+  fast: ollama/qwen3:8b          # used for short/simple turns and intent classification
+  vision: ollama/qwen2.5vl:7b    # used when an image / screenshot is attached
+  fallback: null                 # e.g. anthropic/claude-sonnet-4-5 (needs ANTHROPIC_API_KEY in .env)
+  temperature: 0.6
+  max_tokens: 400
+  request_timeout_s: 60
+  ollama_base_url: http://127.0.0.1:11434
+  ollama_num_ctx: 8192
+  max_tool_rounds: 6
+
+stt:
+  engine: faster_whisper         # faster_whisper | moonshine | openai | groq
+  model: large-v3-turbo
+  device: cuda                   # cuda | cpu | auto
+  compute_type: int8_float16     # int8_float16 on GPU, int8 on CPU
+  beam_size: 1
+
+tts:
+  engine: kokoro                 # kokoro | elevenlabs | openai
+  voice: bm_george               # kokoro voices: bm_george, bm_lewis, bm_daniel, bm_fable, bf_emma ...
+  speed: 1.0
+  comm_link_fx: false
+
+audio:
+  input_device: null             # null = system default; or device index/name from `jarvis doctor`
+  output_device: null
+  sample_rate: 16000
+  frame_ms: 80
+  vad_threshold: 0.5
+  vad_silence_ms: 600
+  max_utterance_s: 15
+
+ui:
+  enabled: true
+  mode: compact                  # compact | panel | cinematic
+  host: 127.0.0.1
+  port: 8765
+  hotkey_text_input: <ctrl>+<shift>+j
+  hotkey_toggle_hud: <ctrl>+<shift>+h
+  start_with_windows: false
+
+tools:
+  everything_path: C:\Program Files\Everything\Everything.exe
+  allow_shell: true              # run_powershell is always behind a confirmation
+  confirm_timeout_s: 15
+
+memory:
+  db_path: data/jarvis.db
+  history_turns: 12
+
+logging:
+  level: INFO
+  file: logs/jarvis.log

@@ -1,0 +1,29 @@
+# Tool permission policy.
+# tiers: safe (run immediately) | confirm (ask sir first) | dangerous (confirm + audit log; disabled if tools.allow_shell=false)
+
+tiers:
+  confirm:
+    - lock_pc
+    - sleep_pc
+    - shutdown_pc
+    - restart_pc
+    - set_wifi
+    - set_bluetooth
+    - delete_path
+    - close_app
+  dangerous:
+    - run_powershell
+
+# Folders Jarvis may search/open/reveal. Expanded with %USERPROFILE% etc. Add extra drives as needed.
+allowed_roots:
+  - "%USERPROFILE%"
+  - "C:\\Users\\Public"
+  - "D:\\"
+  - "E:\\"
+
+# Never touch these, even if inside an allowed root.
+denied_paths:
+  - "%USERPROFILE%\\AppData"
+  - "C:\\Windows"
+  - "C:\\Program Files"
+  - "C:\\Program Files (x86)"
