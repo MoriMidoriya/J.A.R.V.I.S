@@ -41,6 +41,7 @@ class ToolSpec:
     summary: str | None = None  # format string for HUD chip, e.g. "Open {name}"
     confirm_prompt: str | None = None  # format string, e.g. "Shut down the PC in {delay} seconds?"
     is_async: bool = False
+    speak_result: bool = False  # result is already user-facing prose: speak it verbatim, skip the follow-up LLM round
 
     def schema(self) -> dict[str, Any]:
         s = self.params_model.model_json_schema()
@@ -89,9 +90,10 @@ class ToolRegistry:
         name: str | None = None,
         summary: str | None = None,
         confirm_prompt: str | None = None,
+        speak_result: bool = False,
     ) -> Any:
         def deco(f: Callable[..., Any]) -> Callable[..., Any]:
-            spec = build_spec(f, name=name, summary=summary, confirm_prompt=confirm_prompt)
+            spec = build_spec(f, name=name, summary=summary, confirm_prompt=confirm_prompt, speak_result=speak_result)
             self.register(spec)
             return f
 
@@ -147,7 +149,7 @@ class ToolRegistry:
                 return self._finish(
                     call_id, name, False,
                     f"NOT DONE: the user declined, so {name} was NOT executed and nothing changed. "
-                    "Do not retry. Tell the user you have left it as it was (e.g. 'Very well, sir, leaving it open.').",
+                    "Do not retry. Acknowledge in a few words that you have not done it (e.g. 'Very well, sir, cancelled.').",
                     f"{name}: declined",
                 )
 
@@ -196,6 +198,7 @@ def build_spec(
     name: str | None = None,
     summary: str | None = None,
     confirm_prompt: str | None = None,
+    speak_result: bool = False,
 ) -> ToolSpec:
     sig = inspect.signature(fn)
     hints = get_type_hints(fn, include_extras=True)
@@ -216,6 +219,7 @@ def build_spec(
         summary=summary,
         confirm_prompt=confirm_prompt,
         is_async=inspect.iscoroutinefunction(fn),
+        speak_result=speak_result,
     )
 
 

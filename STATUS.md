@@ -15,8 +15,8 @@ what was measured, and why decisions were made*. It is updated at the end of eve
 | 0 | Environment, config, `jarvis doctor` | ✅ done |
 | 1 | Text brain: LLM router, agent loop, tool registry, first PC tools, `jarvis chat` | ✅ done |
 | 2 | Voice loop: wake word → VAD → Whisper → intents/LLM → Kokoro, barge-in, hot window | ✅ done, verified live |
-| 3 | Full PC-control tool suite + confirmations + reminders/memory | 🔄 in progress |
-| 4 | Iron Man HUD (PySide6 overlay + Three.js) + WebSocket | ⏳ next |
+| 3 | Full PC-control tool suite (47 tools) + confirmations + reminders/memory + vision | ✅ done, 22/22 LLM test |
+| 4 | Iron Man HUD (PySide6 overlay + Three.js) + WebSocket | 🔄 in progress |
 | 5 | Vision, persistence, polish, autostart | ⏳ |
 
 Run it today:
@@ -125,6 +125,8 @@ uv run jarvis say "Good evening, sir."   # hear the voice
 | `tools/everything.py` | ctypes binding to Everything SDK; auto-start IPC instance | |
 | `tools/browser.py` | `open_url` (20 site aliases), `web_search` (8 engines incl. YouTube) | |
 | `tools/system.py` | `system_status` (CPU/RAM/GPU/disk/battery), `get_datetime` | |
+| `tools/media.py`, `windows.py`, `power.py`, `network.py`, `inputs.py`, `screen.py`, `shell.py`, `web.py`, `memory.py`, `reminders.py` | Phase 3 control suite — see §7 | |
+| `memory/store.py`, `memory/scheduler.py` | SQLite facts/reminders/messages; 1 s poll → `reminder.due` events | |
 
 ---
 
@@ -217,8 +219,51 @@ A real human voice scores far higher than SAPI's David (0.92–1.00 in every inj
 
 ---
 
-## 7. Phase 3 — Full PC control (in progress)
-*(filled in when complete)*
+## 7. Phase 3 — Full PC control, memory, reminders (done 2026-10-10)
+
+**47 tools** are now registered (was 12). New in Phase 3:
+
+| Module | Tools | How it works |
+|---|---|---|
+| `tools/media.py` | `set_volume`, `change_volume`, `set_mute`, `get_volume`, `set_brightness`, `change_brightness`, `media_control` | Volume via Windows Core Audio (pycaw `EndpointVolume`; COM initialised per worker thread). Brightness via WMI (`screen_brightness_control`). Media keys are synthesised `VK_MEDIA_*` presses — reach Spotify/YouTube/VLC without focus. |
+| `tools/windows.py` | `list_windows`, `focus_window`, `window_action` (minimize/maximize/restore/close/snap_left/snap_right), `show_desktop` | Win32 `EnumWindows`, filtered (visible, titled, not cloaked UWP shells). Fuzzy match on title **and** process name ("switch to chrome" works though Chrome's title is the page). Foreground-lock bypass via `AttachThreadInput` + ALT tap. |
+| `tools/power.py` | `lock_pc`, `sleep_pc`, `shutdown_pc(delay_s)`, `restart_pc(delay_s)`, `cancel_shutdown` | `LockWorkStation`, `SetSuspendState(0,1,0)` (true sleep, not hibernate), `shutdown /s /t`. All but cancel are tier *confirm*. |
+| `tools/network.py` | `set_wifi`, `set_bluetooth` (confirm), `network_status` | Radios through WinRT `Windows.Devices.Radios` from PowerShell 5.1 — **no admin needed** (unlike `netsh`). Status = `netsh wlan show interfaces` + Microsoft's connectivity probe. |
+| `tools/inputs.py` | `get_clipboard`, `set_clipboard`, `type_text`, `press_keys` | pyperclip + pynput; `press_keys("ctrl+shift+esc")` style combos with aliases (win→cmd, esc, f1–f12…). |
+| `tools/screen.py` | `take_screenshot`, `describe_screen(question)` | mss capture → JPEG ≤1280 px → `llm.vision` (qwen2.5vl:7b). **Model swap**: the chat model is evicted first (and we wait for VRAM to actually free), the answer is spoken *directly from the tool* (`speak_result=True`, no second LLM round), and the chat model is re-warmed in the background. |
+| `tools/shell.py` | `run_powershell` | Tier *dangerous*: spoken confirmation + `logs/audit.log` entry; 30 s timeout; output capped at 4 k chars. Hidden from the model entirely if `tools.allow_shell: false`. |
+| `tools/web.py` | `get_weather(city?)`, `fetch_page(url)` | Open-Meteo (free, no key; geocoding cached) — city, `assistant.home_city`, or IP geolocation. Page text via trafilatura. |
+| `tools/memory.py` + `memory/store.py` | `remember`, `recall`, `forget` | SQLite `data/jarvis.db`. The 20 most recent facts are injected into the **system prompt**, so Jarvis just knows them ("Where did I park?" → "Level 3, sir"). |
+| `tools/reminders.py` + `memory/scheduler.py` | `set_reminder(text, when)`, `set_timer(duration, label)`, `list_reminders`, `cancel_reminder` | Times are parsed **in code** ("in 20 minutes", "at 7 pm", "tomorrow at 9", "18:30", "tonight") — the model only relays your words; it is bad at clock arithmetic. A 1 s poll loop fires `reminder.due`; the voice pipeline speaks it immediately when idle, or right after the current turn. Reminders survive restarts (they live in the DB); ones missed while offline are announced once as "missed". Pending reminders appear in the live context so "what's next?" works. |
+
+**Permissions (`config/permissions.yaml`)** — confirm: lock/sleep/shutdown/restart, Wi-Fi/Bluetooth, close_app, delete_path. dangerous: run_powershell. Everything else runs immediately, including `type_text`/`press_keys`/`window_action(close)` — deliberate, since you asked for full control; flip any of them to `confirm` by adding the name to the list.
+
+### Test results
+
+**Direct tool test (46 checks, 2026-10-09):** all pass after two fixes — volume/mute/brightness round-trips (80–460 ms), window list/focus, clipboard, screenshot (174 ms), network status, weather for Pune (1.2 s), Wikipedia page read (0.6 s), remember/recall/forget, timer fired by the scheduler, PowerShell with confirmation + audit entry, `describe_screen` correct ("Visual Studio Code… 'Jarvis PC assistant project'").
+
+**LLM test — 22 natural commands through the real agent (qwen3:8b): 22/22 correct**, e.g. "Turn the volume up a bit" → `change_volume(+15)`; "Shut down the PC in 10 minutes" → `shutdown_pc(600)` + confirmation asked; "Remind me to call mum at 7 pm" → `set_reminder("call mum", "at 7 pm")`; "Where did I park the car?" → recalled "level 3"; "Press alt F4" → `press_keys("alt+F4")`; "How many processes are running? Use PowerShell" → `run_powershell(Get-Process | Measure-Object …)` + confirmation. Typical turn **0.5–0.7 s**; weather 3.2 s (network); "what's on my screen" **6.3 s**.
+
+### Bugs found & fixed in Phase 3
+1. `cancel_reminder("test reminder")` cancelled a timer named "test" — partial-ratio ties. Score now blends full and partial similarity.
+2. "at 7" asked at 23:40 resolved to 19:00 tomorrow; now picks whichever of 07:00/19:00 comes first (07:00 tomorrow).
+3. `describe_screen` took **65 s**: the 7B vision model was loaded *next to* qwen3:8b and half of it spilled to CPU (prompt eval 26 s). Even after adding an explicit unload it was 14 s, because Ollama's unload returns before VRAM is free. Now we unload, **wait for `/api/ps` to drop the model**, then load vision → 3 s load + 1.3 s image encode. The answer is spoken straight from the tool.
+4. `warm()`/keep-alive loaded the model with Ollama's default `num_ctx` (4096) while chat uses 8192 → Ollama saw a different configuration and **reloaded the model on the next turn** (+3–4 s). All loads now pass the same `num_ctx`. (This would have bitten every 10 minutes via the keep-alive.)
+5. `network_status` said "internet unreachable" while weather worked — HEAD against an https-less probe URL. Fixed to GET `http://www.msftconnecttest.com/connecttest.txt`.
+6. After a declined confirmation the model parroted the example phrase ("leaving it open") even for *lock*. Example made neutral.
+
+### Vision model comparison (2026-10-10, 1280-px screenshot, after the swap fix)
+| Model | Load (page cache) | Image + prompt eval | Verdict |
+|---|---|---|---|
+| **qwen2.5vl:7b** (6 GB) | 3.0 s | **1.2–1.3 s** (1,376 tokens) | Correct, reads title text. **Kept as default.** |
+| gemma3:4b (3.3 GB) | — | 21 s (its SigLIP encoder runs slowly in Ollama) | Rejected; removed again. |
+
+Image width 1024 px would save ~0.5 s per look but loses small text; kept 1280.
+
+### Known limitations (Phase 3)
+- Vision costs ~5–6 s because the two models must swap in 12 GB; the chat model is back ~3 s later (hidden unless you ask something immediately).
+- `set_wifi`/`set_bluetooth` depend on Windows granting radio access to desktop apps (worked here).
+- No AEC: "stop" while music plays through the speakers must be louder than the music.
 
 ## 8. Phase 4 — HUD
 *(pending)*

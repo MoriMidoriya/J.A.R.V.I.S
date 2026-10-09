@@ -15,8 +15,12 @@ Voice-first, local-first AI assistant for Windows with full PC control and (comi
 | Speech → text | faster-whisper `large-v3-turbo` on your GPU (~150 ms) |
 | Brain | Ollama `qwen3:8b` locally by default; any Claude / GPT / Gemini / Groq model via API key |
 | Voice | Kokoro-82M, British male (`bm_george`), streamed sentence by sentence |
-| PC control | open/close apps (Start Menu + Store apps), find & open files/folders/movies (Everything index), open sites, web/YouTube search, system status, time |
-| Safety | risky actions ask for spoken confirmation; PowerShell only behind confirmation; file access limited to allow-listed folders |
+| PC control (47 tools) | open/close/switch apps and windows, find & open files/folders/movies (Everything index), volume/mute/brightness, play-pause/skip, lock/sleep/shutdown/restart, Wi-Fi/Bluetooth, clipboard, type text & shortcuts, screenshots, PowerShell, open sites, web/YouTube search, system & network status |
+| Sees the screen | "what's on my screen?" / "read that error" → local vision model (qwen2.5vl) |
+| Remembers | "remember my car is on level 3" → persistent facts, injected into every conversation |
+| Reminders & timers | "remind me to call mum at 7 pm", "set a 12 minute timer for the pasta" → spoken when due, survive restarts |
+| Weather & web | Open-Meteo weather (no key), reads web pages aloud/summarises |
+| Safety | risky actions ask for spoken confirmation; PowerShell only behind confirmation + audit log; file access limited to allow-listed folders |
 | Follow-ups | after a reply you have 8 s to speak again without the wake word |
 
 ## Requirements
@@ -75,6 +79,11 @@ something before it's ready.
 - "Hey Jarvis, find the tax PDF from last year" → lists matches → "open the first one"
 - "Hey Jarvis, play Interstellar" → finds the biggest matching video and plays it
 - "Hey Jarvis, open YouTube" / "search for weather in Pune" / "what time is it" / "how's the battery"
+- "Hey Jarvis, volume to 40" / "mute" / "dim the screen" / "pause the music" / "switch to Discord" / "show the desktop"
+- "Hey Jarvis, what's on my screen?" / "take a screenshot" / "copy that to the clipboard"
+- "Hey Jarvis, remind me to call mum at 7 pm" / "set a timer for 12 minutes" / "what reminders do I have?"
+- "Hey Jarvis, remember that my passport is in the top drawer" / "where's my passport?"
+- "Hey Jarvis, lock the PC" / "shut down in 10 minutes" (asks you to confirm) / "cancel the shutdown"
 - "Hey Jarvis, stop" interrupts speech; "thanks" ends the exchange
 
 ## Configure

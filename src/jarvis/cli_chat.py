@@ -12,10 +12,12 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from jarvis.config import get_settings
-from jarvis.events import ConfirmRequest, Event, EventBus, ToolCall, ToolResult
+from jarvis.events import ConfirmRequest, Event, EventBus, ReminderDue, ToolCall, ToolResult
 from jarvis.llm.agent import Agent
 from jarvis.llm.router import LLMRouter
 from jarvis.logging_setup import setup_logging
+from jarvis.memory.scheduler import ReminderService
+from jarvis.tools import screen
 from jarvis.tools.all import registry
 
 console = Console()
@@ -41,6 +43,7 @@ async def _run(model_override: str | None) -> None:
     registry.bus = bus
     registry.confirm_handler = _confirm
     router = LLMRouter(s)
+    screen.set_router(router)
     agent = Agent(s, router, registry, bus)
     if model_override:
         agent.model_override = model_override
@@ -55,10 +58,13 @@ async def _run(model_override: str | None) -> None:
             console.print(f"  [dim cyan]▸ {e.name}({', '.join(f'{k}={v!r}' for k, v in e.args.items())})[/]")
         elif isinstance(e, ToolResult):
             console.print(f"  [dim {'green' if e.ok else 'red'}]{'✓' if e.ok else '✗'} {e.summary}[/]")
+        elif isinstance(e, ReminderDue):
+            console.print(f"\n[bold magenta]⏰ {e.kind}: {e.text}[/]")
         elif isinstance(e, ConfirmRequest):
             pass
 
     bus.on(None, on_event)
+    ReminderService(bus).start()  # reminders fire in the REPL too (printed, not spoken)
 
     console.print(f"[bold cyan]J.A.R.V.I.S.[/] online. Model: [green]{agent.model_override or s.llm.primary}[/]. Tools: {len(registry.names())}. /help for commands.")
     pending_image: tuple[str, str] | None = None

@@ -164,6 +164,40 @@ class OllamaClient:
         except Exception as e:  # noqa: BLE001
             logger.debug("ollama warm_connection: {}", e)
 
+    async def unload(self, model: str, wait_s: float = 5.0) -> None:
+        """Evict a model from VRAM and wait until it is really gone.
+
+        The unload request returns before the memory is released; loading the next model in that window makes
+        Ollama's scheduler see too little free VRAM and offload layers to the CPU (measured: 11 s vs 1.3 s prompt eval).
+        """
+        import asyncio
+
+        try:
+            t0 = time.perf_counter()
+            await self._http().post("/api/generate", json={"model": model, "keep_alive": 0}, timeout=30)
+            while time.perf_counter() - t0 < wait_s:
+                ps = (await self._http().get("/api/ps", timeout=3)).json().get("models", [])
+                if not any(m.get("name", "").split(":")[0] == model.split(":")[0] and m.get("size_vram", 0) > 0 for m in ps):
+                    break
+                await asyncio.sleep(0.1)
+            logger.debug("ollama unloaded {} in {:.0f} ms", model, (time.perf_counter() - t0) * 1000)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("ollama unload {}: {}", model, e)
+
+    async def warm(self, model: str, timeout: float = 300) -> None:
+        """Load a model into VRAM (no generation) and arm its keep_alive.
+
+        `num_ctx` MUST match what chat requests use: Ollama treats a different context size as a different runner
+        configuration and would reload the model on the next chat call (measured: +3–4 s per turn).
+        """
+        try:
+            t0 = time.perf_counter()
+            body = {"model": model, "keep_alive": self.keep_alive, "options": {"num_ctx": self.num_ctx}}
+            await self._http().post("/api/generate", json=body, timeout=timeout)
+            logger.debug("ollama warmed {} in {:.1f}s", model, time.perf_counter() - t0)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("ollama warm {}: {}", model, e)
+
 
 def is_up(base_url: str, timeout: float = 2.0) -> bool:
     try:

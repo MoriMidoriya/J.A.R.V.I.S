@@ -1,18 +1,27 @@
 # Tool permission policy.
 # tiers: safe (run immediately) | confirm (ask sir first) | dangerous (confirm + audit log; disabled if tools.allow_shell=false)
+# Anything not listed is "safe".
 
 tiers:
   confirm:
+    # power
     - lock_pc
     - sleep_pc
     - shutdown_pc
     - restart_pc
+    # radios
     - set_wifi
     - set_bluetooth
-    - delete_path
+    # things that can lose work
     - close_app
+    - delete_path
   dangerous:
     - run_powershell
+
+# Notes on tools that stay "safe" on purpose (you asked for full control):
+#   window_action(close) — closes a single window via WM_CLOSE; the app still gets to prompt "save changes?"
+#   type_text / press_keys — operate the focused app; Jarvis only does this when you ask him to.
+#   cancel_shutdown — undo, always safe.
 
 # Folders Jarvis may search/open/reveal. Expanded with %USERPROFILE% etc. Add extra drives as needed.
 allowed_roots:

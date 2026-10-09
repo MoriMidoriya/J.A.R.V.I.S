@@ -8,6 +8,7 @@ assistant:
   wake_threshold: 0.5
   hot_window_seconds: 8          # after Jarvis replies, listen for follow-ups without the wake word
   language: en
+  home_city: null                # weather default, e.g. "Pune"; null = locate by IP address
 
 llm:
   # Any LiteLLM model string. Measured 2026-10-09 on the RTX 5070 Ti (12 GB):

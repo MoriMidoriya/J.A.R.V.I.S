@@ -141,11 +141,20 @@ class Agent:
             assistant_msg = result.as_assistant_message()
             messages.append(assistant_msg)
             turn_messages.append(assistant_msg)
+            direct_reply: str | None = None
             for tc in result.tool_calls:
                 outcome = await self.registry.run(tc.name, tc.arguments, call_id=tc.id)
                 tool_msg = {"role": "tool", "tool_call_id": tc.id, "name": tc.name, "content": outcome.content}
                 messages.append(tool_msg)
                 turn_messages.append(tool_msg)
+                spec = self.registry.get(tc.name)
+                if spec and spec.speak_result and outcome.ok and len(result.tool_calls) == 1:
+                    direct_reply = outcome.content
+            if direct_reply:
+                # The tool's output is already the answer (e.g. describe_screen): speak it, skip another LLM round.
+                await emit_text(direct_reply)
+                final_text = direct_reply
+                break
         else:
             final_text = result.text or "I've done what I can, sir."
 

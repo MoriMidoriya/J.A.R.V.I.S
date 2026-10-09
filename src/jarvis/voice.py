@@ -74,6 +74,8 @@ class VoicePipeline:
         self._wake_threshold = wake.threshold
         self._wake_threshold_speaking = min(0.9, wake.threshold + 0.2)
         self.last_stt_ms: int | None = None
+        self._announce_queue: list[str] = []  # reminders that came due while we were busy
+        self.bus.on("reminder.due", self._on_reminder_due)
 
     # ---- state ---------------------------------------------------------------------------------
     async def set_state(self, st: State) -> None:
@@ -135,6 +137,8 @@ class VoicePipeline:
         self._prompted = prompted
         self._hot_window = hot
         await self.set_state(State.LISTENING)
+        if hot:
+            await self._flush_announcements()  # a reminder came due mid-turn: say it now rather than after the window
 
     def _drain_mic(self) -> None:
         """Drop frames captured while we were speaking/thinking so Jarvis never transcribes himself."""
@@ -175,6 +179,7 @@ class VoicePipeline:
         self._hot_window = False
         self._awaiting_first = False
         await self.set_state(State.IDLE)
+        await self._flush_announcements()
 
     # ---- utterance -----------------------------------------------------------------------------
     async def _on_utterance(self, utt: Utterance) -> None:
@@ -264,6 +269,40 @@ class VoicePipeline:
             await self.speaker.say(f"I'm afraid something went wrong on my end, {self.s.assistant.user_title}.")
         if not utter.cancelled:
             await self._start_listening(first=False, hot=True)
+
+    # ---- announcements (reminders / timers) ------------------------------------------------------
+    async def _on_reminder_due(self, ev) -> None:  # noqa: ANN001
+        title = self.s.assistant.user_title
+        if ev.kind == "timer":
+            text = f"{title.capitalize()}, your timer is up." if ev.text in ("", "timer") else f"{title.capitalize()}, your {ev.text} timer is up."
+        else:
+            text = f"{title.capitalize()}, a reminder: {ev.text}"
+        await self.announce(text)
+
+    async def announce(self, text: str) -> None:
+        """Speak something unprompted. Immediately when idle or in the hot window; otherwise after the current turn."""
+        busy = self.state in (State.THINKING, State.SPEAKING, State.CONFIRMING) or (self.state == State.LISTENING and not self._hot_window)
+        if busy:
+            self._announce_queue.append(text)
+            logger.debug("announcement queued (state {}): {!r}", self.state, text)
+            return
+        self._run_turn(self._announce_turn(text))
+
+    async def _announce_turn(self, text: str) -> None:
+        await self.bus.emit(AssistantFinal(text=text))
+        await self.set_state(State.SPEAKING)
+        await self.speaker.say(text)
+        await self._start_listening(first=False, hot=True)  # "thanks" / "snooze"… without the wake word
+
+    async def _flush_announcements(self) -> bool:
+        if not self._announce_queue:
+            return False
+        text = " ".join(self._announce_queue)
+        self._announce_queue.clear()
+        # call_soon: this may run from inside the finishing turn task; starting the new turn after it returns avoids
+        # a task cancelling itself.
+        asyncio.get_running_loop().call_soon(lambda: self._run_turn(self._announce_turn(text)))
+        return True
 
     # ---- confirmations (voice yes/no) ----------------------------------------------------------
     async def confirm(self, _id: str, prompt: str) -> bool:

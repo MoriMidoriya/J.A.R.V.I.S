@@ -8,12 +8,14 @@ from datetime import datetime
 import psutil
 from loguru import logger
 
-# Providers can register extra context lines (e.g. reminders in Phase 5).
+# Providers can register extra context lines. `stable=True` providers go into the system prompt (slow-changing,
+# e.g. remembered facts); the rest are appended to each user message (fast-changing, e.g. pending reminders).
 _providers: list[Callable[[], str | None]] = []
+_stable_providers: list[Callable[[], str | None]] = []
 
 
-def register_context_provider(fn: Callable[[], str | None]) -> None:
-    _providers.append(fn)
+def register_context_provider(fn: Callable[[], str | None], *, stable: bool = False) -> None:
+    (_stable_providers if stable else _providers).append(fn)
 
 
 def day_part(now: datetime | None = None) -> str:
@@ -49,7 +51,14 @@ def battery_line() -> str | None:
 def build_stable_context() -> str:
     """Slow-changing facts → system prompt (keeps the LLM prompt cache valid across turns)."""
     now = datetime.now()
-    return f"- Today: {now.strftime('%A %d %B %Y')}\n- Machine: Windows 11 laptop (ASUS ROG Zephyrus G14)"
+    lines = [f"- Today: {now.strftime('%A %d %B %Y')}", "- Machine: Windows 11 laptop (ASUS ROG Zephyrus G14)"]
+    for p in _stable_providers:
+        try:
+            if s := p():
+                lines.append(s)
+        except Exception:  # noqa: BLE001
+            logger.exception("stable context provider failed")
+    return "\n".join(lines)
 
 
 def build_context() -> str:

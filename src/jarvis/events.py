@@ -108,6 +108,15 @@ class Notice(Event):
     text: str
 
 
+class ReminderDue(Event):
+    """A reminder/timer has come due; the voice pipeline announces it (and the HUD shows it)."""
+
+    type: Literal["reminder.due"] = "reminder.due"
+    id: int
+    text: str
+    kind: Literal["reminder", "timer"] = "reminder"
+
+
 class Metrics(Event):
     type: Literal["metrics"] = "metrics"
     model: str

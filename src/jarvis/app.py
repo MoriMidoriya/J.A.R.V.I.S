@@ -26,7 +26,9 @@ from jarvis.llm.agent import Agent
 from jarvis.llm.context import day_part
 from jarvis.llm.router import LLMRouter
 from jarvis.logging_setup import setup_logging
+from jarvis.memory.scheduler import ReminderService
 from jarvis.stt import make_stt
+from jarvis.tools import screen
 from jarvis.tools.all import registry
 from jarvis.tts import make_tts
 from jarvis.tts.speaker import Speaker
@@ -43,8 +45,10 @@ class JarvisApp:
         self.bus = EventBus()
         self.router = LLMRouter(settings)
         registry.bus = self.bus
+        screen.set_router(self.router)  # describe_screen shares the warm Ollama connection
         self.agent = Agent(settings, self.router, registry, self.bus)
         self.pipeline: VoicePipeline | None = None
+        self.reminders = ReminderService(self.bus)
         self.llm_ready = asyncio.Event()
         self._bg: list[asyncio.Task] = []
 
@@ -68,6 +72,7 @@ class JarvisApp:
         mic = MicInput(loop, sample_rate=self.s.audio.sample_rate, frame_ms=self.s.audio.frame_ms, device=self.s.audio.input_device)
         self.pipeline = VoicePipeline(self.s, self.bus, self.agent, stt, speaker, mic, wake, vad, llm_ready=self.llm_ready)
         registry.confirm_handler = self.pipeline.confirm
+        self.reminders.start()  # after the pipeline exists so due reminders have someone to announce them
 
         logger.info("audio stack ready in {:.1f}s", time.perf_counter() - t0)
         await self.bus.emit(Notice(text="J.A.R.V.I.S. online"))
@@ -123,8 +128,8 @@ class JarvisApp:
         while True:
             await asyncio.sleep(KEEPALIVE_EVERY_S)
             try:
-                # Through the router's pooled client so the HTTP connection itself stays warm too.
-                await self.router.ollama._http().post("/api/generate", json={"model": name, "keep_alive": self.s.llm.ollama_keep_alive}, timeout=10)
+                # Same client + same num_ctx as chat requests, so this never triggers a reload.
+                await self.router.ollama.warm(name, timeout=60)
                 logger.debug("ollama keep-alive sent for {}", name)
             except Exception as e:  # noqa: BLE001
                 logger.debug("keep-alive failed: {}", e)

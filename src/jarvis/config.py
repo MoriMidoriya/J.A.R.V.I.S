@@ -29,6 +29,7 @@ class AssistantCfg(BaseModel):
     wake_threshold: float = 0.5
     hot_window_seconds: float = 8.0
     language: str = "en"
+    home_city: str | None = None  # for weather when no city is named; null = locate by IP
 
 
 class LLMCfg(BaseModel):
