@@ -66,7 +66,7 @@ def get_weather(city: Annotated[str | None, Field(description="City name. Leave 
         ).json()
     except ToolError:
         raise
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         raise ToolError(f"Weather service unavailable: {e}") from e
     cur, day = r.get("current", {}), r.get("daily", {})
     out = {
@@ -93,7 +93,7 @@ def fetch_page(
     try:
         r = httpx.get(url, timeout=12, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Jarvis/1.0"})
         r.raise_for_status()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         raise ToolError(f"Could not fetch {url}: {e}") from e
     text = trafilatura.extract(r.text, include_comments=False, include_tables=True, favor_recall=True) or ""
     if not text.strip():

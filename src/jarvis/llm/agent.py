@@ -93,17 +93,20 @@ class Agent:
         """Run one user turn to completion. Streams reply text via `on_text` and the event bus."""
         t_start = time.perf_counter()
 
-        chosen = model or self.model_override or (self.s.llm.vision if image_b64 and self.s.llm.vision else self.s.llm.primary)
-        system = {"role": "system", "content": load_persona(self.s, build_stable_context())}
-        user_msg = self._user_message(f"[{build_context()}]\n{text}", image_b64, image_mime)
-        messages: list[dict[str, Any]] = [system, *self.history, user_msg]
-
         async def emit_text(delta: str) -> None:
             await self.bus.emit(AssistantToken(text=delta))
             if on_text:
                 r = on_text(delta)
                 if r is not None and hasattr(r, "__await__"):
                     await r
+
+        if image_b64 and not model and not self.model_override:
+            return await self._vision_turn(text, image_b64, image_mime, emit_text, t_start)
+
+        chosen = model or self.model_override or self.s.llm.primary
+        system = {"role": "system", "content": load_persona(self.s, build_stable_context())}
+        user_msg = self._user_message(f"[{build_context()}]\n{text}", image_b64, image_mime)
+        messages: list[dict[str, Any]] = [system, *self.history, user_msg]
 
         final_text = ""
         first_token_ms: int | None = None
@@ -171,6 +174,43 @@ class Agent:
         await self.bus.emit(AssistantFinal(text=final_text))
         await self.bus.emit(Metrics(model=chosen, llm_first_token_ms=first_token_ms, total_ms=total_ms))
         logger.info("turn done in {} ms (first token {} ms) via {}", total_ms, first_token_ms, chosen)
+        return final_text
+
+    async def _vision_turn(self, text: str, image_b64: str, image_mime: str, emit_text: TextCB, t_start: float) -> str:
+        """An image was attached (HUD drop/paste): one tool-free round on the vision model, with the VRAM swap.
+
+        The 7B vision model is slow with a long tool schema and poor at calling tools, so it only gets a short persona
+        and the image. The exchange is still recorded in history (as text) so the chat model knows what was discussed.
+        """
+        question = text.strip() or "What do you see in this image?"
+        system = {
+            "role": "system",
+            "content": (
+                f"You are J.A.R.V.I.S., Tony Stark's AI, speaking to the user whom you address as '{self.s.assistant.user_title}'. "
+                "Describe or answer questions about the attached image concisely and concretely, reading any important text verbatim. "
+                "At most four sentences; this will be read aloud."
+            ),
+        }
+        messages = [system, self._user_message(question, image_b64, image_mime)]
+        try:
+            async with self.router.vision_swap() as vision_model:
+                result = await self.router.stream(messages, model=vision_model, on_text=emit_text, max_tokens=300, temperature=0.2, timeout=180)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("vision turn failed")
+            final_text = f"I'm afraid I couldn't analyse the image, {self.s.assistant.user_title}: {e}"
+            await emit_text(final_text)
+            vision_model = self.s.llm.vision or "?"
+            first_token_ms = None
+        else:
+            final_text = result.text.strip() or f"I could not make anything out, {self.s.assistant.user_title}."
+            first_token_ms = result.first_token_ms
+        self.history.append({"role": "user", "content": f"[sent an image] {question}"})
+        self.history.append({"role": "assistant", "content": final_text})
+        self._trim()
+        total_ms = int((time.perf_counter() - t_start) * 1000)
+        await self.bus.emit(AssistantFinal(text=final_text))
+        await self.bus.emit(Metrics(model=vision_model, llm_first_token_ms=first_token_ms, total_ms=total_ms))
+        logger.info("vision turn done in {} ms (first token {} ms) via {}", total_ms, first_token_ms, vision_model)
         return final_text
 
     @staticmethod

@@ -45,7 +45,7 @@ class MicInput:
         """Recent audio preceding the current moment (so the first syllable after the wake word isn't lost)."""
         return np.concatenate(list(self._preroll)) if self._preroll else np.zeros(0, dtype=np.int16)
 
-    def _cb(self, indata: np.ndarray, frames: int, time_info, status) -> None:  # noqa: ANN001
+    def _cb(self, indata: np.ndarray, frames: int, time_info, status) -> None:
         if status:
             logger.debug("mic status: {}", status)
         frame = indata[:, 0].copy()

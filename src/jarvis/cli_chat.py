@@ -9,7 +9,6 @@ import warnings
 from pathlib import Path
 
 from rich.console import Console
-from rich.markdown import Markdown
 
 from jarvis.config import get_settings
 from jarvis.events import ConfirmRequest, Event, EventBus, ReminderDue, ToolCall, ToolResult

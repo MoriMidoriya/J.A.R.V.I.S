@@ -14,7 +14,7 @@ import httpx
 from rich.console import Console
 from rich.table import Table
 
-from jarvis.config import MODELS_DIR, get_settings
+from jarvis.config import MODELS_DIR, ROOT, get_settings
 
 console = Console()
 
@@ -176,6 +176,8 @@ def check_node(r: Report) -> None:
         except Exception:  # noqa: BLE001
             pass
     r.add("Node.js (HUD build)", node is not None, ver or "not found", "winget install OpenJS.NodeJS.LTS", warn=node is None)
+    dist = ROOT / "hud" / "dist" / "index.html"
+    r.add("HUD built (hud/dist)", dist.exists(), str(dist.parent) if dist.exists() else "not built", "cd hud && npm install && npm run build", warn=not dist.exists())
 
 
 def check_packages(r: Report) -> None:

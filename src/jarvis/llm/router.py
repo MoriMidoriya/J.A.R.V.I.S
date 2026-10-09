@@ -6,10 +6,12 @@ see `llm/ollama.py` for why). Everything else goes through LiteLLM using its mod
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -128,6 +130,28 @@ class LLMRouter:
     def wants_no_think(model: str) -> bool:
         # Soft switch for Qwen3 served by providers that don't expose a think flag (OpenRouter, Groq...).
         return "qwen3" in model.lower() and not model.startswith(("ollama/", "ollama_chat/"))
+
+    @asynccontextmanager
+    async def vision_swap(self) -> AsyncIterator[str]:
+        """Make room for the vision model and yield its name.
+
+        qwen2.5vl:7b (~6 GB) and qwen3:8b (~6.3 GB) do not both fit in 12 GB; if Ollama is left to juggle them the
+        vision model is half-offloaded to CPU and a description takes ~65 s instead of ~5 s. So: explicitly unload the
+        chat model and wait until its VRAM is released, run the vision call, then re-warm the chat model in the
+        background (the spoken answer does not need it).
+        """
+        vision = self.s.llm.vision
+        if not vision:
+            raise RuntimeError("No vision model is configured (llm.vision).")
+        swap = self.is_local(vision) and self.is_local(self.s.llm.primary) and vision != self.s.llm.primary
+        chat_name = self.s.llm.primary.split("/", 1)[1]
+        if swap:
+            await self.ollama.unload(chat_name)
+        try:
+            yield vision
+        finally:
+            if swap:
+                asyncio.get_running_loop().create_task(self.ollama.warm(chat_name))
 
     # ---- streaming completion ------------------------------------------------------------------
     async def stream(
@@ -272,7 +296,7 @@ class LLMRouter:
     async def stream_with_fallback(self, *args: Any, **kwargs: Any) -> LLMResult:
         try:
             return await self.stream(*args, **kwargs)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             if not self.s.llm.fallback or kwargs.get("model") == self.s.llm.fallback:
                 raise
             logger.warning("primary model failed ({}); falling back to {}", e, self.s.llm.fallback)

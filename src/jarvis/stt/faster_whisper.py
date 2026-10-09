@@ -15,7 +15,7 @@ from jarvis.stt.base import STTEngine, Transcript, sanitize
 def _expose_cuda_dlls() -> None:
     """CTranslate2 needs cuBLAS/cuDNN DLLs on the search path; the torch wheel ships them."""
     try:
-        import torch  # noqa: F401 — importing torch also loads the CUDA runtime DLLs
+        import torch
 
         lib = Path(torch.__file__).parent / "lib"
         if lib.exists():

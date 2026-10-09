@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>J.A.R.V.I.S.</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <canvas id="scene"></canvas>
+    <div id="hud">
+      <!-- top-left: identity + status -->
+      <header id="head">
+        <div class="brand">J.A.R.V.I.S.</div>
+        <div class="status"><span id="state-dot"></span><span id="state-text">BOOTING</span></div>
+      </header>
+
+      <!-- scrolling transcript (user + assistant) -->
+      <section id="transcript"></section>
+
+      <!-- tool call chips -->
+      <section id="tools"></section>
+
+      <!-- confirmation card -->
+      <section id="confirm" class="hidden">
+        <div id="confirm-text"></div>
+        <div class="row">
+          <button id="confirm-yes" class="btn yes">Confirm</button>
+          <button id="confirm-no" class="btn no">Cancel</button>
+        </div>
+      </section>
+
+      <!-- bottom: input + metrics -->
+      <footer id="foot">
+        <form id="input-form" autocomplete="off">
+          <input id="input" type="text" placeholder="Type a command, sir — or drop an image" spellcheck="false" />
+          <button id="send" type="submit" aria-label="send">▶</button>
+        </form>
+        <div id="metrics"></div>
+      </footer>
+
+      <div id="drop-hint" class="hidden">Drop image to analyse</div>
+      <div id="image-preview" class="hidden"><img alt="" /><button id="image-clear" type="button" aria-label="remove image">×</button></div>
+    </div>
+    <div id="boot"><div class="boot-lines"></div></div>
+    <div id="scanlines"></div>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

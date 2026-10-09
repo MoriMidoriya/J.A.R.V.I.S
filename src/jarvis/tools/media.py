@@ -20,9 +20,8 @@ VK = {"play_pause": 0xB3, "next": 0xB0, "previous": 0xB1, "stop": 0xB2, "volume_
 KEYEVENTF_KEYUP = 0x0002
 
 
-def _endpoint():  # noqa: ANN202
+def _endpoint():
     from comtypes import CoInitialize
-
     from pycaw.pycaw import AudioUtilities
 
     CoInitialize()  # tools run in worker threads; COM must be initialised per thread
@@ -78,7 +77,7 @@ def get_volume() -> str:
     return f"Volume {round(ep.GetMasterVolumeLevelScalar() * 100)}%" + (", muted." if ep.GetMute() else ".")
 
 
-def _sbc():  # noqa: ANN202
+def _sbc():
     import screen_brightness_control as sbc
 
     return sbc
@@ -89,7 +88,7 @@ def set_brightness(level: Annotated[int, Field(ge=0, le=100, description="Target
     """Set screen brightness to an absolute percentage (all displays)."""
     try:
         _sbc().set_brightness(level)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         raise ToolError(f"Brightness control failed: {e}") from e
     return f"Brightness set to {level}%."
 
@@ -103,7 +102,7 @@ def change_brightness(delta: Annotated[int, Field(ge=-100, le=100, description="
         cur_v = int(cur[0]) if cur else 50
         new = max(0, min(100, cur_v + delta))
         sbc.set_brightness(new)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         raise ToolError(f"Brightness control failed: {e}") from e
     return f"Brightness {cur_v}% → {new}%."
 

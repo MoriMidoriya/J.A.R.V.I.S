@@ -7,7 +7,6 @@ both fit in 12 GB, so Ollama swaps them — expect ~3–5 s extra the first time
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import io
 import time
@@ -70,17 +69,12 @@ async def describe_screen(
         {"role": "system", "content": "You describe screenshots of a Windows PC for a voice assistant. Be concise and concrete: name the apps and windows, read key text and errors verbatim, and answer the question directly in at most four sentences."},
         {"role": "user", "content": [{"type": "text", "text": question}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}]},
     ]
-    # Both models rarely fit in VRAM together; a half-offloaded vision model is 10× slower than a swapped one.
-    swap = router.is_local(s.llm.vision) and router.is_local(s.llm.primary) and s.llm.vision != s.llm.primary
-    if swap:
-        await router.ollama.unload(s.llm.primary.split("/", 1)[1])
     try:
-        r = await router.stream(messages, model=s.llm.vision, max_tokens=300, temperature=0.2, timeout=180)
-    except Exception as e:  # noqa: BLE001
+        # Both models rarely fit in VRAM together; router.vision_swap() unloads the chat model first (see router.py).
+        async with router.vision_swap() as vision_model:
+            r = await router.stream(messages, model=vision_model, max_tokens=300, temperature=0.2, timeout=180)
+    except Exception as e:
         raise ToolError(f"Vision model failed: {e}") from e
-    finally:
-        if swap:  # bring the chat model back in the background; the spoken answer doesn't need it (speak_result)
-            asyncio.get_running_loop().create_task(router.ollama.warm(s.llm.primary.split("/", 1)[1]))
     logger.info("describe_screen via {} in {:.1f}s", s.llm.vision, time.perf_counter() - t0)
     return r.text or "I could not make anything out, sir."
 
@@ -88,7 +82,7 @@ async def describe_screen(
 _router = None
 
 
-def set_router(router) -> None:  # noqa: ANN001
+def set_router(router) -> None:
     """Share the app's router (and its warm Ollama connection) with this module."""
     global _router
     _router = router

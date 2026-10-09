@@ -27,6 +27,9 @@ from jarvis.llm.context import day_part
 from jarvis.llm.router import LLMRouter
 from jarvis.logging_setup import setup_logging
 from jarvis.memory.scheduler import ReminderService
+from jarvis.server.api import build_app
+from jarvis.server.api import serve as serve_api
+from jarvis.server.hub import Hub
 from jarvis.stt import make_stt
 from jarvis.tools import screen
 from jarvis.tools.all import registry
@@ -48,6 +51,8 @@ class JarvisApp:
         screen.set_router(self.router)  # describe_screen shares the warm Ollama connection
         self.agent = Agent(settings, self.router, registry, self.bus)
         self.pipeline: VoicePipeline | None = None
+        self.loop: asyncio.AbstractEventLoop | None = None
+        self.hub = Hub(settings, self.bus)
         self.reminders = ReminderService(self.bus)
         self.llm_ready = asyncio.Event()
         self._bg: list[asyncio.Task] = []
@@ -56,7 +61,10 @@ class JarvisApp:
         t0 = time.perf_counter()
         await self.bus.emit(StateChanged(state=State.BOOTING))
         loop = asyncio.get_running_loop()
+        self.loop = loop
 
+        # HUD server first, so the window can connect and show the boot sequence while models load.
+        self._bg.append(loop.create_task(serve_api(build_app(self.s, self.hub, self.agent), self.s.ui.host, self.s.ui.port)))
         # Kick the LLM warmup off first; it overlaps with the audio model loads.
         self._bg.append(loop.create_task(self._warm_llm()))
         # Pre-build the Start Menu app index so the first "open X" doesn't pay the ~1 s scan mid-turn.
@@ -72,6 +80,7 @@ class JarvisApp:
         mic = MicInput(loop, sample_rate=self.s.audio.sample_rate, frame_ms=self.s.audio.frame_ms, device=self.s.audio.input_device)
         self.pipeline = VoicePipeline(self.s, self.bus, self.agent, stt, speaker, mic, wake, vad, llm_ready=self.llm_ready)
         registry.confirm_handler = self.pipeline.confirm
+        self.hub.pipeline = self.pipeline
         self.reminders.start()  # after the pipeline exists so due reminders have someone to announce them
 
         logger.info("audio stack ready in {:.1f}s", time.perf_counter() - t0)
@@ -81,12 +90,12 @@ class JarvisApp:
         await speaker.say(f"Systems online. Good {greeting_part}, {self.s.assistant.user_title}.{tail}")
         await self.pipeline.run()
 
-    def _load_tts(self):  # noqa: ANN202
+    def _load_tts(self):
         tts = make_tts(self.s)
         tts.warmup()
         return tts
 
-    def _load_stt(self):  # noqa: ANN202
+    def _load_stt(self):
         stt = make_stt(self.s)
         stt.warmup()
         return stt
@@ -122,6 +131,17 @@ class JarvisApp:
         if self.router.is_local(self.s.llm.primary):
             self._bg.append(asyncio.get_running_loop().create_task(self._keepalive()))
 
+    def request_stop(self) -> None:
+        """Thread-safe: cancel every task in the backend loop so `asyncio.run(start())` unwinds (mic/TTS close)."""
+        if self.loop is None or self.loop.is_closed():
+            return
+
+        def _cancel_all() -> None:
+            for t in asyncio.all_tasks(self.loop):
+                t.cancel()
+
+        self.loop.call_soon_threadsafe(_cancel_all)
+
     async def _keepalive(self) -> None:
         """Re-arm Ollama's keep_alive timer so the model stays in VRAM while Jarvis runs (cheap no-op request)."""
         name = self.s.llm.primary.split("/", 1)[1]
@@ -139,8 +159,32 @@ def main(ui: bool = True, debug: bool = False) -> None:
     s = get_settings()
     setup_logging(s, console_level="DEBUG" if debug else s.logging.level)
     app = JarvisApp(s, ui=ui)
-    try:
-        asyncio.run(app.start())
-    except KeyboardInterrupt:
-        logger.info("shutting down")
-        sys.exit(0)
+    if not ui:
+        try:
+            asyncio.run(app.start())
+        except KeyboardInterrupt:
+            logger.info("shutting down")
+            sys.exit(0)
+        return
+
+    # With the HUD: Qt must own the main thread (QtWebEngine insists), so the asyncio backend runs in a daemon
+    # thread and the window talks to it only through the local WebSocket/HTTP server — a clean seam.
+    import threading
+
+    from jarvis.ui.window import run_window
+
+    def backend() -> None:
+        try:
+            asyncio.run(app.start())
+        except asyncio.CancelledError:
+            pass
+        except Exception:  # noqa: BLE001
+            logger.exception("backend crashed")
+
+    th = threading.Thread(target=backend, name="jarvis-backend", daemon=True)
+    th.start()
+    code = run_window(s)
+    logger.info("HUD closed; shutting down")
+    app.request_stop()
+    th.join(timeout=5)
+    sys.exit(code)

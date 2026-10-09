@@ -1,9 +1,9 @@
 # J.A.R.V.I.S. — Build Status & Engineering Log
 
-Voice-first, local-first Windows assistant with full PC control and (soon) an Iron Man HUD.
+Voice-first, local-first Windows assistant with full PC control and an Iron Man HUD.
 Design: [`PLAN.md`](PLAN.md) · Setup/usage: [`README.md`](README.md) · Root: `C:\Users\Mori\jarvis`
 
-**Last updated: 2026-10-09 (session 2).** This file is the single source of truth for *what exists, how it works,
+**Last updated: 2026-10-10 (session 2, Phase 4 done).** This file is the single source of truth for *what exists, how it works,
 what was measured, and why decisions were made*. It is updated at the end of every phase.
 
 ---
@@ -16,18 +16,22 @@ what was measured, and why decisions were made*. It is updated at the end of eve
 | 1 | Text brain: LLM router, agent loop, tool registry, first PC tools, `jarvis chat` | ✅ done |
 | 2 | Voice loop: wake word → VAD → Whisper → intents/LLM → Kokoro, barge-in, hot window | ✅ done, verified live |
 | 3 | Full PC-control tool suite (47 tools) + confirmations + reminders/memory + vision | ✅ done, 22/22 LLM test |
-| 4 | Iron Man HUD (PySide6 overlay + Three.js) + WebSocket | 🔄 in progress |
-| 5 | Vision, persistence, polish, autostart | ⏳ |
+| 4 | Iron Man HUD: FastAPI/WebSocket hub + Three.js reactor + PySide6 transparent overlay, text & image input | ✅ done, verified live |
+| 5 | Persistence, autostart, polish | 🔄 in progress |
 
 Run it today:
 
 ```powershell
 cd C:\Users\Mori\jarvis
 uv run jarvis doctor        # health check
+uv run jarvis run           # FULL: voice + HUD overlay (tray icon; Ctrl+Shift+J to type; Ctrl+Shift+H hide/show)
+uv run jarvis run --no-ui   # voice only, no window — HUD still available at http://127.0.0.1:8765/
+uv run jarvis hud           # window only, attaches to a running backend
 uv run jarvis chat          # text REPL with full PC control
-uv run jarvis run --no-ui   # VOICE: say "Hey Jarvis, daddy's home"   (Ctrl+C to stop)
 uv run jarvis say "Good evening, sir."   # hear the voice
 ```
+
+First time only: `cd hud; npm install; npm run build` (the HUD is a Vite build; `jarvis doctor` checks for it).
 
 ---
 
@@ -49,6 +53,8 @@ uv run jarvis say "Good evening, sir."   # hear the voice
 | D12 | **Boot does not wait for the LLM** (2026-10-09) | After a reboot Ollama needs 60–90 s to load a model from a cold disk, then ~12 s one-off warmup. Jarvis now says "Systems online" as soon as audio is ready (~30 s), fast-path greetings work immediately, and if you ask something before the model is up he says "my language model is still loading" and answers when it is. |
 | D13 | **Jarvis starts Ollama itself if it isn't running** (2026-10-09) | Ollama was not in your Windows startup list after the reboot. `llm/ollama.py` launches the tray app and waits for the API. A keep-alive ping every 10 min keeps the model in VRAM while Jarvis runs. |
 | D14 | **Live context goes in the user message, not the system prompt** | Keeps the system prompt + tool schemas byte-identical across turns so Ollama's prompt cache hits: 1,550 prompt tokens are re-used in 0.03 s instead of re-evaluated in 0.5 s. |
+| D16 | **HUD talks to the backend only over the local WebSocket** (2026-10-10) | QtWebEngine must own the main thread, so the asyncio backend runs in a thread; rather than share objects across threads, the window is just another WebSocket client. Result: the same HUD runs in a browser tab, `jarvis hud` can attach to a running `jarvis run --no-ui`, and scripts get `/chat` for free. |
+| D17 | **Transparency via an alpha-from-brightness post pass instead of dropping bloom** (2026-10-10) | Bloom is what makes it look like the films, but Three's bloom pass writes alpha = 1 everywhere. Since the whole scene is light on black, brightness is a faithful coverage value; one 6-line shader restores transparency and keeps the glow. |
 | D15 | **Native Ollama client for local models; LiteLLM only for cloud** (2026-10-09) | Root-caused a recurring ~2.1 s first-token stall: LiteLLM rebuilds its HTTP client whenever its pooled connection has been idle > 5 s (slow on Windows), and imports in 2.5 s. Direct `/api/chat` over one persistent `httpx` connection: **41–100 ms** to first token for text, 230–430 ms for tool calls (Ollama emits the call once its JSON is complete), 75–85 tok/s generation, plus server-side stats (`prompt_eval`, `load_duration`) in the debug log. `llm/ollama.py` → `OllamaClient`; conversions for tool-call arguments (object vs string), tool results and images live in `to_ollama_messages()`. |
 
 ### Questions I had for you — answered by default, change if you disagree
@@ -92,8 +98,9 @@ uv run jarvis say "Good evening, sir."   # hear the voice
                                                           │   ▲                └─ LiteLLM → Claude/GPT/Gemini/Groq (key)
                                                           ▼   │ results
                                                        Tool registry (apps, files, browser, system, …)
-                                                          │ confirm? ──► spoken yes/no
-                                              EventBus → (Phase 4) WebSocket → HUD
+                                                          │ confirm? ──► spoken yes/no  (or HUD buttons)
+                                              EventBus → Hub → WebSocket 127.0.0.1:8765 → HUD (Qt overlay / browser)
+                                                                       ◄── typed text, images, confirm, wake, interrupt
 ```
 
 ### Source map (`src/jarvis/`)
@@ -127,6 +134,11 @@ uv run jarvis say "Good evening, sir."   # hear the voice
 | `tools/system.py` | `system_status` (CPU/RAM/GPU/disk/battery), `get_datetime` | |
 | `tools/media.py`, `windows.py`, `power.py`, `network.py`, `inputs.py`, `screen.py`, `shell.py`, `web.py`, `memory.py`, `reminders.py` | Phase 3 control suite — see §7 | |
 | `memory/store.py`, `memory/scheduler.py` | SQLite facts/reminders/messages; 1 s poll → `reminder.due` events | |
+| `server/hub.py` | WebSocket hub: EventBus → all HUD clients; HUD commands → pipeline | Per-client queue + writer task (ordering, back-pressure); `hello` with history + pending confirm. |
+| `server/api.py` | FastAPI app: `/ws`, `/health`, `/chat`, `/confirm`, `/interrupt`, static `hud/dist` | uvicorn runs inside the backend's asyncio loop (`loop="none"`). |
+| `ui/window.py` | PySide6 shell: frameless/transparent/on-top `QWebEngineView`, tray, hotkeys, modes | Compact mode is click-through via Win32 `WS_EX_TRANSPARENT`; drag to move in panel mode. |
+| `hud/src/scene.ts` | Three.js reactor: particle sphere shader, rings, ticks, core, waveform ring, bloom + alpha pass | `setState / setSpeechLevel / setMicLevel / pulse`. |
+| `hud/src/main.ts`, `ws.ts`, `style.css` | DOM panels, typed WS client with reconnect/backoff, state colours, modes | `?mode=` and `?bg=1` (opaque background for browser dev) URL options. |
 
 ---
 
@@ -265,10 +277,145 @@ Image width 1024 px would save ~0.5 s per look but loses small text; kept 1280.
 - `set_wifi`/`set_bluetooth` depend on Windows granting radio access to desktop apps (worked here).
 - No AEC: "stop" while music plays through the speakers must be louder than the music.
 
-## 8. Phase 4 — HUD
-*(pending)*
+## 8. Phase 4 — Iron Man HUD (done 2026-10-10, verified live)
 
-## 9. Phase 5 — Vision, persistence, polish
+Three parts, each independently useful:
+
+| Part | Files | What it is |
+|---|---|---|
+| **Server** | `server/hub.py`, `server/api.py` | FastAPI + WebSocket on `127.0.0.1:8765` (loopback only). Every `EventBus` event is fanned out to connected HUDs as JSON; HUD commands come back the same way. Also serves the built HUD as static files and a tiny REST surface for scripts. |
+| **HUD** | `hud/` (Vite + TypeScript + Three.js) → `hud/dist/` | The arc reactor scene + panels (transcript, tool chips, confirm card, input box, metrics, boot sequence). Runs in any Chromium: the Qt window, or a browser tab at `http://127.0.0.1:8765/`. |
+| **Shell** | `ui/window.py` (PySide6) | Frameless, transparent, always-on-top `QWebEngineView` that loads the HUD, with tray icon, global hotkeys and three layout modes. |
+
+### How it fits together (and why Qt owns the main thread)
+
+```
+ jarvis run ─┬─ main thread: Qt event loop → HudWindow (QWebEngineView → http://127.0.0.1:8765/?mode=compact)
+             │                                  ▲ tray menu / hotkeys (pynput thread → Qt Signal)
+             └─ "jarvis-backend" thread: asyncio loop
+                   ├─ uvicorn (FastAPI) ── /ws ──► Hub ── per-client asyncio.Queue ── writer task ──► HUD
+                   │                        ◄── {"type":"text"|"image"|"confirm"|"wake"|"interrupt"}
+                   ├─ EventBus.on(None, hub._on_event)   # every event → JSON → all clients
+                   └─ VoicePipeline / Agent / tools (unchanged from Phases 2–3)
+```
+
+QtWebEngine insists on living in the main thread, so with the HUD enabled the whole Phase 2–3 backend runs in a
+daemon thread (`app.main`). The two halves talk **only** through the local WebSocket/HTTP server — a clean seam that
+also means you can run them separately: `jarvis run --no-ui` + `jarvis hud` (or a browser tab), which is how the
+HUD was developed. Quitting from the tray calls `JarvisApp.request_stop()` (cancels all backend tasks → mic/TTS close).
+
+### WebSocket protocol (`ws://127.0.0.1:8765/ws`)
+
+Server → client: every event from `events.py` exactly as `model_dump()` (`state`, `wake`, `transcript.final`,
+`assistant.token`, `assistant.final`, `audio.level`, `mic.level`, `tool.call`, `tool.result`, `confirm.request`,
+`confirm.resolved`, `notice`, `reminder.due`, `metrics`) plus one `hello` on connect carrying the current state, the
+model name, the layout mode, the **last 40 transcript/tool events** (so a HUD that opens or reconnects late shows the
+conversation) and any **pending confirmation** (so the buttons reappear after a reconnect).
+
+Client → server: `text` (typed command — goes through exactly the same `handle_text()` as speech: intents, agent,
+spoken reply), `image` (base64 + mime → vision turn), `confirm` (`id`, `accepted`), `wake` (click the reactor), `interrupt` (Esc).
+
+Delivery rules in `Hub`: one outbound queue + one writer task per client → strict ordering; if a client falls more than
+256 messages behind, only `audio.level`/`mic.level` samples are dropped, never state/transcript/tool events. A
+command may run for seconds (a whole spoken turn), so each is spawned as its own task and never blocks the socket.
+
+REST (for scripts/automations): `GET /health`, `POST /chat {"text":..., "speak":true|false}` (speak=false → silent
+agent reply as JSON), `POST /confirm`, `POST /interrupt`.
+
+### The scene (`hud/src/scene.ts`) — what pulses and how
+
+| Layer | Driven by | Notes |
+|---|---|---|
+| Particle sphere (6 000 points, Fibonacci-distributed) | `audio.level` (Jarvis' voice) | GLSL vertex shader displaces each point along its normal by `noise(t)·(idle breath + level)`; fast ripple term + slow drift term. At full level the sphere grows ≈0.5 and stays inside the inner ring. |
+| 3 gyroscopic rings + 72 tick marks | state colour, spin speed ∝ level | Rings spin faster while thinking; opacity rises with level. |
+| Core disc + halo | level | Opacity 0.2 → 0.7. |
+| Waveform ring (128 bars) | `mic.level` while LISTENING/CONFIRMING | History buffer; fades in/out with state. |
+| UnrealBloomPass | level | Strength 0.4 → 0.8. |
+
+State colours: cyan idle/speaking, **amber** listening/confirming, white-blue thinking (rings race, sphere breathes
+deeper), red on link loss. Levels are smoothed per frame with fast attack / slow release so the ~18 Hz level events
+feel continuous at 60 fps. DPR capped at 1.5 (the 2880×1800 panel would otherwise render 4× the pixels);
+rendering pauses when the tab/window is hidden.
+
+Calibration (measured live, Kokoro `bm_george`, 268 samples over one reply): `audio.level` p50 **0.36**, p90 0.53,
+max 0.66 at ~18 Hz (the `AudioPlayer` already compresses RMS as `min(1,(rms·4)^0.7)` at 40 Hz and de-duplicates
+changes < 0.02). HUD gain is 1.1 so normal speech sits around 0.4 and peaks near 0.75 without clipping.
+
+### Layout modes (`ui.mode`, tray menu, or `Ctrl+Shift+M` to cycle)
+
+| Mode | Size / place | Shows | Mouse |
+|---|---|---|---|
+| `compact` (default) | 340×340, bottom-right | reactor + status word | **click-through** (Win32 `WS_EX_TRANSPARENT`) — it never steals a click |
+| `panel` | 520×760, bottom-right, draggable | reactor, transcript, tool chips, confirm card, input, metrics | normal |
+| `cinematic` | full screen overlay | everything, big type, centred | normal |
+
+Hotkeys (global, pynput): `Ctrl+Shift+J` show + focus the text box (switches compact → panel), `Ctrl+Shift+H`
+show/hide, `Ctrl+Shift+M` cycle mode. In the HUD itself: `/` focuses the input, `Esc` cancels a confirmation or
+interrupts speech, clicking the reactor = "Hey Jarvis". Images: drag-drop or paste (Ctrl+V) → thumbnail → type a
+question (or just Enter) → vision turn.
+
+### Test results
+
+**Server smoke test** (temp script, fake pipeline, 14 checks): health, index served, silent `/chat`, `hello`
+payload, text → `transcript.final`/`state`/`tool.call`/`tool.result`/`assistant.token`/`audio.level`/`assistant.final`
+in order, `source:"text"`, image → agent with mime, confirm buttons → `resolve_confirm_external`, wake, interrupt,
+`confirm.request` broadcast, history replay to a late client, client cleanup on disconnect, 200 level events
+delivered in **4 ms**. **14/14.** Plus a connect/disconnect leak test (4 scenarios, 0 leaked clients).
+
+**Visual test** (demo server replaying scripted turns into the built HUD in a browser, screenshots): idle reactor;
+SPEAKING with the sphere rippling; LISTENING amber with the waveform ring; AWAITING CONFIRMATION amber with the card;
+transcript bubbles + typewriter streaming + cursor; tool chip `▸ open_app: Spotify ✓`; metrics line.
+
+**Live test** (`jarvis run`, real models, real Kokoro):
+- Boot: Qt window up **0.4–0.5 s** after launch, server 0.4 s later, HUD connected ~1 s after that (boot sequence
+  plays while models load). Audio stack ready in **29–33 s** warm (68 s the first time after reboot — Kokoro 49 s cold).
+- Typed "Tell me about the arc reactor in three sentences." → spoken + streamed on the HUD: first token 112–134 ms,
+  turn 2.0–2.7 s; the compact reactor pulsed with the real voice.
+- Image drop (142 KB JPEG screenshot of the desktop) → "The screen displays a text editor with a project titled
+  'Jarvis PC assistant project'… a web browser with the J.A.R.V.I.S. interface, and a terminal…" — correct.
+  Timeline: chat model unloaded in 181 ms → vision first token **8.2 s** (model loaded from disk; ~4.6 s once cached)
+  → spoken → chat model re-warmed in the background in 5.2 s.
+- Desktop capture confirmed: frameless, transparent (desktop visible through the window), always on top, compact mode
+  click-through, tray icon present, hotkeys registered.
+
+### Bugs found & fixed in Phase 4
+
+1. **Opaque black window.** Three's `UnrealBloomPass` blur shader writes `alpha = 1` for every pixel, so the
+   transparent canvas became solid black and the "transparent" Qt window showed a black square. Fixed with a final
+   `ShaderPass` that derives alpha from brightness (`alpha = max(r,g,b)`, colour un-premultiplied) — everything in
+   the scene is glow on black, so brightness *is* coverage. A soft threshold (`smoothstep(0.02, 0.14)`) removes the
+   faint haze the widest bloom mip spreads over the whole frame. Also set an 8-bit alpha `QSurfaceFormat` on the Qt side.
+2. **Over-exposure.** First render was a white blob: 6 000 additive points × bloom 1.1. Rebalanced particle alpha
+   (0.85 → 0.28), point size, core opacity, bloom (strength 0.45, threshold 0.25). Then with the *real* voice the sphere
+   still washed out — measured the actual level distribution (p50 0.36, not the 0.05–0.3 I had assumed) and set the
+   gain from data (1.1). Displacement/size/glow multipliers per level were also cut so a full-scale level stays inside the rings.
+3. **Compact window saturated** while the panel looked right: a 340-px canvas has ~7× fewer pixels for the same 6 000
+   points. `resize()` now scales point size and alpha with the canvas size.
+4. **Confirm card never appeared.** `setState()` hid the card on any non-`confirming` state, but the pipeline speaks
+   the question first (`confirm.request` → `speaking` → `confirming`). Now the card only hides on `confirm.resolved`
+   or when the turn ends (idle/listening); plus `hello` carries `pending_confirm` for reconnects.
+5. **Streaming bubble 7 px wide, one word per line.** `addMsg("assistant", "")` creates no text node, so tokens were
+   written into the blinking-cursor `<span>` (width 7 px). Fixed with an explicit `Text` node.
+6. **Hub fan-out used one `ensure_future(ws.send_text)` per event** — concurrent sends on one socket with no ordering
+   guarantee. Replaced by a per-client queue + single writer (also gives back-pressure with level-sample dropping).
+7. **Typed image turns would have taken ~65 s**: `agent.respond(image_b64=…)` switched to the vision model without
+   the VRAM swap that `describe_screen` does. Factored the swap into `LLMRouter.vision_swap()` (async context manager)
+   and gave the agent a dedicated tool-free `_vision_turn()`; both the tool and the HUD path use it.
+8. **Ctrl+C ignored with the HUD** (Qt's C++ loop never returns to Python): `SIG_DFL` + a 250 ms no-op `QTimer`.
+9. **Three mystery `wake word (1.00)` hits** in the live log turned out to be reactor clicks from a HUD tab (score 1.0
+   is what `wake_external()` passes). Now logged as "wake requested by HUD" so it is never mistaken for a false trigger.
+
+### Known limitations (Phase 4)
+- The Qt window loads the HUD once; after `npm run build` use tray → *Reload HUD* (or restart). No hot reload in Qt
+  (use `npm run dev` + a browser tab for HUD development; Vite proxies `/ws` to the backend).
+- Hotkeys were registered but not exercised by an automated test (I did not inject keystrokes into your session).
+- Confirm buttons were tested against the WS→pipeline wiring; the full spoken-question → button path was not driven
+  live because every confirm-tier tool has a real side effect (lock/sleep/close…). The button calls the same
+  `resolve_confirm_external()` the voice path uses.
+- In `cinematic` mode the window covers the whole screen and is *not* click-through — use it for show, `compact` for work.
+- Between "Kokoro loaded" and "audio stack ready" there is a 16 s gap on warm boots (HF Hub voice check + warm-up synth); a Phase 5 item.
+
+## 9. Phase 5 — Persistence, autostart, polish
 *(pending)*
 
 ---
@@ -287,13 +434,19 @@ Image width 1024 px would save ~0.5 s per look but loses small text; kept 1280.
 | Disable PowerShell tool | `tools.allow_shell: false` |
 | Allow another drive for file search | add to `allowed_roots` in `config/permissions.yaml` |
 | Verbose logs | `uv run jarvis run --debug` (file log is always DEBUG: `logs/jarvis.log`) |
+| HUD starts in panel / cinematic mode | `ui.mode: panel` (or `cinematic`); cycle live with `Ctrl+Shift+M` |
+| Different hotkeys | `ui.hotkey_text_input`, `ui.hotkey_toggle_hud` (pynput syntax, e.g. `<ctrl>+<alt>+j`) |
+| HUD too bright / too subtle | `hud/src/scene.ts`: `setSpeechLevel` gain (1.1), bloom strength (`0.4 + level*0.4`), particle `uAlpha` (0.28); then `cd hud; npm run build` + tray → Reload HUD |
+| Develop the HUD with hot reload | `uv run jarvis run --no-ui` in one terminal, `cd hud; npm run dev` in another → http://localhost:5173/?bg=1 |
 
 ---
 
 ## 11. Git history
 
 ```
-(working tree)  Phase 2 fixes: voice.py rewrite, boot order, Ollama autostart, logging, VAD trim, qwen3:8b default
+(working tree)  Phase 4: WebSocket hub + FastAPI, Three.js HUD, PySide6 overlay, vision_swap, docs
+d09ed55  Phase 3: full PC control, memory, reminders, vision
+a4a2600  Phase 2 complete: native Ollama client, voice fixes, boot order, docs
 f0b0d5b  (your commit, titled "Phase 0 and partial Phase 1") — actually Phase 2 voice code + STATUS.md
 90b4cc6  Phase 1: LiteLLM router, agent loop, tool registry, apps/files/browser/system tools, chat REPL
 272277b  Phase 0: plan, environment, config, doctor

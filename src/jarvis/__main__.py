@@ -57,6 +57,20 @@ def run(
 
 
 @app.command()
+def hud(mode: str | None = typer.Option(None, "--mode", help="compact | panel | cinematic (overrides settings.yaml)")) -> None:
+    """Open only the HUD window and attach to a backend already started with `jarvis run --no-ui`."""
+    from jarvis.config import get_settings
+    from jarvis.logging_setup import setup_logging
+    from jarvis.ui.window import run_window
+
+    s = get_settings()
+    if mode:
+        s.ui.mode = mode  # type: ignore[assignment]
+    setup_logging(s)
+    raise typer.Exit(run_window(s))
+
+
+@app.command()
 def say(text: str) -> None:
     """Speak a line with the configured TTS voice (for testing voices)."""
     from jarvis.tts import speak_blocking

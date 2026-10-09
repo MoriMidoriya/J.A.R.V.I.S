@@ -13,7 +13,7 @@ from jarvis.tts.base import TTSEngine
 
 # Small pronunciation fixes for spoken output.
 REPLACEMENTS = [
-    (re.compile(r"\bJ\.A\.R\.V\.I\.S\.?", re.I), "Jarvis"),
+    (re.compile(r"\bJ\.A\.R\.V\.I\.S\.?", re.IGNORECASE), "Jarvis"),
     (re.compile(r"\bPC\b"), "P C"),
     (re.compile(r"\bGPU\b"), "G P U"),
     (re.compile(r"\bCPU\b"), "C P U"),
@@ -22,7 +22,7 @@ REPLACEMENTS = [
     (re.compile(r"\bUI\b"), "U I"),
     (re.compile(r"\bAPI\b"), "A P I"),
     (re.compile(r"\bURL\b"), "U R L"),
-    (re.compile(r"\bWi-?Fi\b", re.I), "wifi"),
+    (re.compile(r"\bWi-?Fi\b", re.IGNORECASE), "wifi"),
     (re.compile(r"(\d+)%"), r"\1 percent"),
     (re.compile(r"[*_`#>]+"), ""),  # stray markdown
 ]
@@ -47,7 +47,7 @@ class KokoroTTS(TTSEngine):
         self.lang_code = lang_code or ("b" if voice.startswith("b") else "a")
         self._pipe = None
 
-    def _pipeline(self):  # noqa: ANN202
+    def _pipeline(self):
         if self._pipe is None:
             t0 = time.perf_counter()
             import torch

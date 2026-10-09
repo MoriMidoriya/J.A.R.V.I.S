@@ -40,7 +40,7 @@ class Speaker:
     def is_speaking(self) -> bool:
         return self.player.is_playing or any(not f.done() for f in self._pending)
 
-    def begin(self) -> "Utterance":
+    def begin(self) -> Utterance:
         self._t0 = time.perf_counter()
         self._first_audio_ms = None
         return Utterance(self)

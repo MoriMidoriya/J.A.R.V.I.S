@@ -28,7 +28,17 @@ from jarvis.audio.input import MicInput, rms_level
 from jarvis.audio.vad import SileroVAD, Utterance
 from jarvis.audio.wakeword import WakeWord
 from jarvis.config import Settings
-from jarvis.events import AssistantFinal, EventBus, Metrics, MicLevel, Notice, State, StateChanged, TranscriptFinal, WakeDetected
+from jarvis.events import (
+    AssistantFinal,
+    EventBus,
+    Metrics,
+    MicLevel,
+    Notice,
+    State,
+    StateChanged,
+    TranscriptFinal,
+    WakeDetected,
+)
 from jarvis.llm import intents
 from jarvis.llm.agent import Agent
 from jarvis.stt.base import STTEngine
@@ -210,8 +220,37 @@ class VoicePipeline:
             return
         self._run_turn(self._agent_turn(text, stt_ms))
 
+    # ---- entry points for the HUD / API (typed text, images, buttons) ---------------------------
+    async def submit_text(self, text: str, image_b64: str | None = None, image_mime: str = "image/png") -> None:
+        """Typed input from the HUD or REST. Behaves like a spoken utterance (same intents, same agent, spoken reply)."""
+        text = text.strip()
+        if not text and not image_b64:
+            return
+        if self.state == State.CONFIRMING:
+            self._resolve_confirm(text)
+            return
+        await self.bus.emit(TranscriptFinal(text=text or "(image)", source="text"))
+        if image_b64:
+            self._run_turn(self._agent_turn(text or "What do you see?", None, image_b64=image_b64, image_mime=image_mime))
+        else:
+            await self.handle_text(text)
+
+    async def wake_external(self) -> None:
+        """HUD click / hotkey: behave as if the wake word was heard."""
+        if self.state in (State.LISTENING, State.CONFIRMING):
+            return
+        logger.info("wake requested by HUD (click / hotkey)")
+        await self._on_wake(1.0)
+
+    async def interrupt(self) -> None:
+        """HUD 'stop' button: cancel speech and go idle."""
+        self._cancel_turn()
+        self.speaker.cancel()
+        self._resolve_confirm("")
+        await self._go_idle()
+
     # ---- turns (anything that speaks runs here, never in the frame loop) ------------------------
-    def _run_turn(self, coro) -> None:  # noqa: ANN001
+    def _run_turn(self, coro) -> None:
         self._cancel_turn()
         self.speaker.cancel()
         self._turn = asyncio.create_task(coro)
@@ -238,7 +277,7 @@ class VoicePipeline:
         await self.speaker.say(text)
         await self._start_listening(first=True, prompted=True)
 
-    async def _agent_turn(self, text: str, stt_ms: int | None) -> None:
+    async def _agent_turn(self, text: str, stt_ms: int | None, image_b64: str | None = None, image_mime: str = "image/png") -> None:
         await self.set_state(State.THINKING)
         if not self.llm_ready.is_set():
             await self.set_state(State.SPEAKING)
@@ -256,7 +295,7 @@ class VoicePipeline:
             utter.feed(delta)
 
         try:
-            await self.agent.respond(text, on_text=on_text)
+            await self.agent.respond(text, on_text=on_text, image_b64=image_b64, image_mime=image_mime)
             await self.set_state(State.SPEAKING)
             await utter.finish()
             logger.info("voice turn: stt {} ms, first audio {} ms after LLM start", stt_ms, self.speaker.first_audio_ms)
@@ -271,7 +310,7 @@ class VoicePipeline:
             await self._start_listening(first=False, hot=True)
 
     # ---- announcements (reminders / timers) ------------------------------------------------------
-    async def _on_reminder_due(self, ev) -> None:  # noqa: ANN001
+    async def _on_reminder_due(self, ev) -> None:
         title = self.s.assistant.user_title
         if ev.kind == "timer":
             text = f"{title.capitalize()}, your timer is up." if ev.text in ("", "timer") else f"{title.capitalize()}, your {ev.text} timer is up."

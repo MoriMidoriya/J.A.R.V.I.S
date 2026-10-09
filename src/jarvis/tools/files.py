@@ -181,7 +181,7 @@ def open_path(path: Annotated[str, Field(description="Absolute path of a file or
         raise ToolError(f"Path does not exist: {path}")
     if not is_allowed(p):
         raise ToolError("That location is outside the folders I'm permitted to open.")
-    os.startfile(str(p))  # noqa: S606
+    os.startfile(str(p))
     return f"Opened {'folder' if p.is_dir() else 'file'} {p.name}."
 
 
@@ -202,7 +202,7 @@ def open_folder(name: Annotated[str, Field(description="A known folder ('downloa
     """Open a user folder by name, or find a folder anywhere on the PC by name and open it."""
     kf = known_folder(name)
     if kf and kf.exists():
-        os.startfile(str(kf))  # noqa: S606
+        os.startfile(str(kf))
         return f"Opened {kf.name or 'home'} folder."
     res = search_paths(name, kind="folder", limit=5)
     if not res:
@@ -210,7 +210,7 @@ def open_folder(name: Annotated[str, Field(description="A known folder ('downloa
     best = res[0]
     if len(res) > 1 and fuzz.WRatio(name.lower(), best["name"].lower()) < 80:
         return "Several folders match; ask which one: " + "; ".join(r["path"] for r in res)
-    os.startfile(best["path"])  # noqa: S606
+    os.startfile(best["path"])
     return f"Opened folder {best['path']}."
 
 
@@ -229,5 +229,5 @@ def play_media(
     # Prefer the largest file whose name fuzzy-matches best (full movie over trailer/sample).
     res.sort(key=lambda r: (-fuzz.partial_ratio(query.lower(), r["name"].lower()), r["size"]))
     best = res[0]
-    os.startfile(best["path"])  # noqa: S606
+    os.startfile(best["path"])
     return f"Playing {best['name']}."

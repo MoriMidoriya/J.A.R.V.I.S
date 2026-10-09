@@ -289,6 +289,13 @@ Permission tiers in `config/permissions.yaml`:
   - Effects: scanlines, chromatic aberration on state change, glitch-in on wake, boot sequence on start ("J.A.R.V.I.S. online").
 - **Reduced-motion / performance:** 60 fps target; DPR cap; pause rendering when hidden.
 
+> **As built (2026-10-10):** sizes are 340×340 / 520×760; mode cycling added (`Ctrl+Shift+M`). Two deviations worth
+> knowing: (1) QtWebEngine must own the main thread, so the asyncio backend runs in a daemon thread and the window is
+> simply another WebSocket client of `127.0.0.1:8765` — nothing is shared across threads; (2) `UnrealBloomPass`
+> writes alpha = 1 everywhere, which would make the window an opaque black square, so a final shader pass derives
+> alpha from brightness (glow-on-black ⇒ brightness = coverage). Chromatic aberration / glitch effects were left out
+> (scanlines + boot sequence are in). Details, measurements and bugs in `STATUS.md` §8.
+
 ### 5.9 Text & image input
 - Text: HUD input box (hotkey `Ctrl+Shift+J`), plus `/chat` REST for scripts, plus a CLI `jarvis say "..."`.
 - Images: drag-drop or paste (Ctrl+V) in HUD → base64 → vision-capable model. "Jarvis, look at my screen — what's the error?" → `describe_screen` tool.

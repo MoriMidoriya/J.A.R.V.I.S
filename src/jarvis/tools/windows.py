@@ -168,9 +168,8 @@ def window_action(
 @tool(summary="Show desktop")
 def show_desktop() -> str:
     """Minimise all windows and show the desktop."""
-    import win32com.client
-
     import pythoncom
+    import win32com.client
 
     pythoncom.CoInitialize()
     win32com.client.Dispatch("Shell.Application").MinimizeAll()

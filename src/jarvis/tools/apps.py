@@ -167,7 +167,7 @@ def _launch(target: str) -> None:
         subprocess.Popen(DIRECT[target], creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
         return
     if target.lower().endswith(".lnk") or os.path.exists(target):
-        os.startfile(target)  # noqa: S606
+        os.startfile(target)
         return
     # AppID from Get-StartApps → shell:AppsFolder works for UWP and desktop apps alike.
     subprocess.Popen(["explorer.exe", f"shell:AppsFolder\\{target}"], creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
