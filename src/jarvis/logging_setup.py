@@ -14,18 +14,22 @@ from loguru import logger
 
 from jarvis.config import Settings
 
-_current: tuple[Settings, str] | None = None
+_current: tuple[Settings, str, str | None] | None = None
 CONSOLE_FMT = "<green>{time:HH:mm:ss.SSS}</green> <level>{level: <7}</level> <cyan>{name}</cyan> {message}"
 
 
-def setup_logging(settings: Settings, console_level: str | None = None) -> None:
+def setup_logging(settings: Settings, console_level: str | None = None, name: str | None = None) -> None:
+    """Console (if there is one) + rotating file. `name` picks a separate file (logs/<name>.log) — the HUD window
+    process uses "hud" so two processes never rotate the same file under each other."""
     global _current
     level = console_level or settings.logging.level
-    _current = (settings, level)
+    _current = (settings, level, name)
     logger.remove()
-    logger.add(sys.stderr, level=level, format=CONSOLE_FMT, enqueue=True)
-    settings.log_path.parent.mkdir(parents=True, exist_ok=True)
-    logger.add(settings.log_path, level="DEBUG", rotation="10 MB", retention=5, encoding="utf-8", enqueue=True)
+    if sys.stderr is not None:  # None under pythonw.exe (Windows autostart) — file log only
+        logger.add(sys.stderr, level=level, format=CONSOLE_FMT, enqueue=True)
+    path = settings.log_path if name is None else settings.log_path.with_name(f"{name}.log")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    logger.add(path, level="DEBUG", rotation="10 MB", retention=5, encoding="utf-8", enqueue=True)
 
 
 def reapply() -> None:

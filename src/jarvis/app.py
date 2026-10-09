@@ -42,9 +42,11 @@ KEEPALIVE_EVERY_S = 600
 
 
 class JarvisApp:
-    def __init__(self, settings: Settings, ui: bool = True) -> None:
+    """The backend: voice pipeline + HUD server. Always runs in its own process (`jarvis run --no-ui` is exactly
+    this; `jarvis run` starts it as a child of the window process — see `ui.launcher`)."""
+
+    def __init__(self, settings: Settings) -> None:
         self.s = settings
-        self.ui = ui
         self.bus = EventBus()
         self.router = LLMRouter(settings)
         registry.bus = self.bus
@@ -55,7 +57,19 @@ class JarvisApp:
         self.hub = Hub(settings, self.bus)
         self.reminders = ReminderService(self.bus)
         self.llm_ready = asyncio.Event()
-        self._bg: list[asyncio.Task] = []
+        self._bg: list[asyncio.Future] = []
+
+    def _spawn(self, coro, name: str) -> asyncio.Task:
+        """Background task whose failure is *logged* — a bare create_task() dies silently (bit us under pythonw)."""
+        task = asyncio.get_running_loop().create_task(coro, name=name)
+
+        def _done(t: asyncio.Task) -> None:
+            if not t.cancelled() and t.exception() is not None:
+                logger.opt(exception=t.exception()).error("background task {} failed", name)
+
+        task.add_done_callback(_done)
+        self._bg.append(task)
+        return task
 
     async def start(self) -> None:
         t0 = time.perf_counter()
@@ -64,9 +78,9 @@ class JarvisApp:
         self.loop = loop
 
         # HUD server first, so the window can connect and show the boot sequence while models load.
-        self._bg.append(loop.create_task(serve_api(build_app(self.s, self.hub, self.agent), self.s.ui.host, self.s.ui.port)))
+        self._spawn(serve_api(build_app(self.s, self.hub, self.agent), self.s.ui.host, self.s.ui.port), "hud-server")
         # Kick the LLM warmup off first; it overlaps with the audio model loads.
-        self._bg.append(loop.create_task(self._warm_llm()))
+        self._spawn(self._warm_llm(), "llm-warmup")
         # Pre-build the Start Menu app index so the first "open X" doesn't pay the ~1 s scan mid-turn.
         self._bg.append(loop.run_in_executor(None, self._warm_apps_index))
 
@@ -129,7 +143,7 @@ class JarvisApp:
             logger.warning("llm warmup failed: {}", e)
         self.llm_ready.set()
         if self.router.is_local(self.s.llm.primary):
-            self._bg.append(asyncio.get_running_loop().create_task(self._keepalive()))
+            self._spawn(self._keepalive(), "ollama-keepalive")
 
     def request_stop(self) -> None:
         """Thread-safe: cancel every task in the backend loop so `asyncio.run(start())` unwinds (mic/TTS close)."""
@@ -157,34 +171,25 @@ class JarvisApp:
 
 def main(ui: bool = True, debug: bool = False) -> None:
     s = get_settings()
-    setup_logging(s, console_level="DEBUG" if debug else s.logging.level)
-    app = JarvisApp(s, ui=ui)
     if not ui:
+        # The backend proper: voice pipeline + HUD server, one asyncio loop on the main thread.
+        setup_logging(s, console_level="DEBUG" if debug else s.logging.level)
+        app = JarvisApp(s)
+        app.hub.on_shutdown = app.request_stop  # `POST /shutdown` from the HUD launcher
         try:
             asyncio.run(app.start())
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, asyncio.CancelledError):
             logger.info("shutting down")
-            sys.exit(0)
-        return
+        sys.exit(0)
 
-    # With the HUD: Qt must own the main thread (QtWebEngine insists), so the asyncio backend runs in a daemon
-    # thread and the window talks to it only through the local WebSocket/HTTP server — a clean seam.
-    import threading
-
+    # With the HUD: this process is the *window* (Qt must own the main thread — QtWebEngine insists) and the backend
+    # runs as a child process, talking to the window only through the local WebSocket/HTTP server. Two processes
+    # rather than a backend thread because Qt/Chromium in the same process slowed every model load by ~1.6x (D18).
+    from jarvis.ui.launcher import BackendProcess
     from jarvis.ui.window import run_window
 
-    def backend() -> None:
-        try:
-            asyncio.run(app.start())
-        except asyncio.CancelledError:
-            pass
-        except Exception:  # noqa: BLE001
-            logger.exception("backend crashed")
-
-    th = threading.Thread(target=backend, name="jarvis-backend", daemon=True)
-    th.start()
-    code = run_window(s)
-    logger.info("HUD closed; shutting down")
-    app.request_stop()
-    th.join(timeout=5)
+    setup_logging(s, console_level="DEBUG" if debug else s.logging.level, name="hud")
+    with BackendProcess(s, debug=debug) as backend:
+        code = run_window(s, on_tick=backend.poll)
+        logger.info("HUD closed; stopping backend")
     sys.exit(code)

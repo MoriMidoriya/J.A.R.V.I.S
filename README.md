@@ -24,6 +24,8 @@ Voice-first, local-first AI assistant for Windows with full PC control and an Ir
 | Follow-ups | after a reply you have 8 s to speak again without the wake word |
 | HUD | transparent always-on-top arc reactor that pulses with his voice (cyan idle, amber listening, racing rings while thinking); transcript, tool chips, confirm buttons, metrics; tray icon; three layout modes |
 | Type or drop images | `Ctrl+Shift+J` opens the text box — typed commands behave exactly like spoken ones; drag-drop / paste an image and ask about it |
+| Picks up where you left off | conversations are saved; after a restart (within 6 h) he still knows what you were talking about |
+| Starts with Windows | `uv run jarvis autostart on` — launches silently at sign-in, lives in the tray |
 
 ## Requirements
 
@@ -66,18 +68,25 @@ GROQ_API_KEY=...
 ## Run
 
 ```powershell
-uv run jarvis run                  # voice + HUD overlay (tray icon in the corner). Quit from the tray or Ctrl+C.
-uv run jarvis run --no-ui          # voice only; the HUD is still served at http://127.0.0.1:8765/ for a browser tab
+uv run jarvis run                  # HUD overlay + voice backend (tray icon in the corner). Quit from the tray or Ctrl+C.
+uv run jarvis run --no-ui          # backend only; the HUD is still served at http://127.0.0.1:8765/ for a browser tab
 uv run jarvis hud                  # just the overlay window, attaching to a backend already running
 uv run jarvis chat                 # text REPL with the same brain and tools
 uv run jarvis say "Good evening, sir."
 uv run jarvis doctor -v            # diagnostics
-uv run jarvis run --debug          # verbose console; file log is always at logs/jarvis.log
+uv run jarvis run --debug          # verbose console; file logs are always at logs/jarvis.log (backend) + logs/hud.log (window)
+uv run jarvis autostart on         # start at Windows sign-in, no console window (off | status)
 ```
 
-Boot takes ~30 s (loading models onto the GPU); the HUD appears within a second and plays its boot sequence meanwhile.
-Jarvis says *"Systems online"* when ready. If Ollama isn't running he starts it himself; the language model may take
-another minute after a cold reboot and he'll tell you if you ask something before it's ready.
+Boot takes ~11 s with warm caches (loading models onto the GPU; up to a minute the first time after a reboot); the HUD
+appears within a second and plays its boot sequence meanwhile. Jarvis says *"Systems online"* when ready. If Ollama
+isn't running he starts it himself; the language model may take another minute after a cold reboot and he'll tell you
+if you ask something before it's ready.
+
+`jarvis run` is two processes: the window, and the voice backend it spawns (`jarvis run --no-ui`). The backend can
+never outlive the window (Windows Job Object), is restarted if it crashes, and a crash in the window's Chromium never
+takes your assistant down. Conversations are saved to `data/jarvis.db`; if you restart within `memory.resume_hours`
+(6) he continues the thread ("what did I just ask you?" works). `/reset` in `jarvis chat` starts a clean slate.
 
 ### The HUD
 
@@ -128,9 +137,9 @@ llm:
 ```
 config/        settings.yaml, permissions.yaml, persona.md
 src/jarvis/    app.py (boot), voice.py (state machine), audio/, stt/, tts/, llm/, tools/, memory/,
-               server/ (FastAPI + WebSocket hub), ui/ (PySide6 overlay window)
+               server/ (FastAPI + WebSocket hub), ui/ (PySide6 overlay window, backend launcher, autostart)
 hud/           Vite + TypeScript + Three.js HUD → hud/dist (built once; npm run dev for hot reload)
 models/        wake-word ONNX + Everything SDK dll (downloaded, gitignored)
-data/          app index cache, voice samples, SQLite (gitignored)
-logs/          jarvis.log (rotating, gitignored)
+data/          app index cache, voice samples, SQLite — facts, reminders, conversation (gitignored)
+logs/          jarvis.log (backend) + hud.log (window), rotating, gitignored
 ```

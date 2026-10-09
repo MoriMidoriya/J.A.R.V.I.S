@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from typing import Any
 
 from loguru import logger
@@ -69,6 +70,7 @@ class Agent:
         self.bus = bus
         self.history: list[dict[str, Any]] = []
         self.model_override: str | None = None
+        self._restore_history()
 
     # ---- history -------------------------------------------------------------------------------
     def _trim(self) -> None:
@@ -78,7 +80,55 @@ class Agent:
             self.history = self.history[-keep:]
 
     def reset(self) -> None:
+        """Forget the current conversation — also across restarts (a `system` marker row stops the resume there)."""
         self.history.clear()
+        try:
+            from jarvis.memory.store import get_store
+
+            get_store().log_message("system", "[conversation reset]")
+        except Exception as e:  # noqa: BLE001
+            logger.debug("could not persist reset marker: {}", e)
+
+    def _restore_history(self) -> None:
+        """Continue where we left off: reload the recent conversation from SQLite if it is fresh enough.
+
+        Only user/assistant text is persisted (tool exchanges are not), which is also what the model needs to
+        resolve "open the second one" or "what did I just ask?" after a restart. A `system` row (written by
+        `reset()`) is a hard boundary: nothing before it is restored.
+        """
+        hours = self.s.memory.resume_hours
+        if hours <= 0:
+            return
+        try:
+            from jarvis.memory.store import get_store
+
+            rows = get_store().recent_messages(limit=self.s.memory.history_turns * 2)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("history restore skipped: {}", e)
+            return
+        for i in range(len(rows) - 1, -1, -1):  # keep only what came after the last reset marker
+            if rows[i]["role"] == "system":
+                rows = rows[i + 1 :]
+                break
+        if not rows:
+            return
+        last = datetime.fromisoformat(rows[-1]["ts"])
+        age_h = (datetime.now() - last).total_seconds() / 3600
+        if age_h > hours:
+            logger.debug("previous conversation is {:.1f} h old; starting fresh", age_h)
+            return
+        self.history = [{"role": r["role"], "content": r["text"]} for r in rows if r["role"] in ("user", "assistant")]
+        logger.info("resumed conversation: {} messages, last one {:.0f} min ago", len(self.history), age_h * 60)
+
+    def _persist(self, user_text: str, assistant_text: str, model: str) -> None:
+        try:
+            from jarvis.memory.store import get_store
+
+            store = get_store()
+            store.log_message("user", user_text)
+            store.log_message("assistant", assistant_text, meta=model)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("could not persist turn: {}", e)
 
     # ---- main entry ----------------------------------------------------------------------------
     async def respond(
@@ -165,10 +215,11 @@ class Agent:
             final_text = "Done, sir."
             await emit_text(final_text)
 
-        # Persist the turn (user, any tool exchange, final assistant text).
+        # Keep the turn in context (user, any tool exchange, final assistant text) and on disk (text only).
         self.history.extend(turn_messages)
         self.history.append({"role": "assistant", "content": final_text})
         self._trim()
+        self._persist(text, final_text, chosen)
 
         total_ms = int((time.perf_counter() - t_start) * 1000)
         await self.bus.emit(AssistantFinal(text=final_text))
@@ -207,6 +258,7 @@ class Agent:
         self.history.append({"role": "user", "content": f"[sent an image] {question}"})
         self.history.append({"role": "assistant", "content": final_text})
         self._trim()
+        self._persist(f"[sent an image] {question}", final_text, vision_model)
         total_ms = int((time.perf_counter() - t_start) * 1000)
         await self.bus.emit(AssistantFinal(text=final_text))
         await self.bus.emit(Metrics(model=vision_model, llm_first_token_ms=first_token_ms, total_ms=total_ms))

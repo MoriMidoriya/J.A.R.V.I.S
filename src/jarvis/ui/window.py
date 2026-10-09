@@ -14,8 +14,9 @@ Hotkeys (global, via pynput):
   ui.hotkey_toggle_hud  (default Ctrl+Shift+H)  show / hide
   Ctrl+Shift+M                                  cycle mode
 
-Threading: Qt owns the main thread; the asyncio backend runs in a daemon thread (see app.main). Hotkey callbacks
-arrive on pynput's thread and are marshalled to Qt via a queued Signal.
+Processes: Qt owns this process's main thread; the voice backend is a *child process* started by `ui.launcher` (see
+app.main and D18) and this window is just one more WebSocket client of it. Hotkey callbacks arrive on pynput's thread
+and are marshalled to Qt via a queued Signal.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ import ctypes
 import signal
 import sys
 import time
+from collections.abc import Callable
 from typing import Literal
 
 from loguru import logger
@@ -230,8 +232,10 @@ class HudWindow(QWidget):
         self._drag_pos = None
 
 
-def run_window(settings: Settings) -> int:
-    """Create the Qt app + HUD window and run the Qt event loop on the calling (main) thread."""
+def run_window(settings: Settings, on_tick: Callable[[], None] | None = None) -> int:
+    """Create the Qt app + HUD window and run the Qt event loop on the calling (main) thread.
+
+    `on_tick` is called every 2 s from the Qt loop (the launcher uses it to supervise the backend process)."""
     # Chromium flags: GPU compositing for the transparent WebGL canvas, and no throttling when the window is unfocused.
     sys.argv += ["--disable-renderer-backgrounding", "--enable-gpu-rasterization", "--ignore-gpu-blocklist"]
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
@@ -248,6 +252,10 @@ def run_window(settings: Settings) -> int:
     tick = QTimer()
     tick.timeout.connect(lambda: None)
     tick.start(250)
+    supervise = QTimer()
+    if on_tick is not None:
+        supervise.timeout.connect(on_tick)
+        supervise.start(2000)
     t0 = time.perf_counter()
     win = HudWindow(settings)
     win.show()

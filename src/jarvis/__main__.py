@@ -47,12 +47,17 @@ def chat(
 
 @app.command()
 def run(
-    no_ui: bool = typer.Option(False, "--no-ui", help="Voice only, no HUD window"),
+    no_ui: bool = typer.Option(False, "--no-ui", help="Backend only (voice + HUD server), no window — `jarvis hud` can attach"),
+    mode: str | None = typer.Option(None, "--mode", help="HUD mode: compact | panel | cinematic (overrides settings.yaml)"),
     debug: bool = typer.Option(False, "--debug"),
 ) -> None:
     """Start the full assistant: wake word, voice loop, tools, HUD."""
     from jarvis.app import main as app_main
 
+    if mode:
+        from jarvis.config import get_settings
+
+        get_settings().ui.mode = mode  # type: ignore[assignment]
     app_main(ui=not no_ui, debug=debug)
 
 
@@ -66,8 +71,25 @@ def hud(mode: str | None = typer.Option(None, "--mode", help="compact | panel | 
     s = get_settings()
     if mode:
         s.ui.mode = mode  # type: ignore[assignment]
-    setup_logging(s)
+    setup_logging(s, name="hud")  # logs/hud.log — never the backend's file (two processes, one rotating file = trouble)
     raise typer.Exit(run_window(s))
+
+
+@app.command()
+def autostart(
+    action: str = typer.Argument("status", help="on | off | status"),
+    mode: str | None = typer.Option(None, "--mode", help="HUD mode to start in (compact | panel | cinematic)"),
+) -> None:
+    """Start J.A.R.V.I.S. automatically when you sign in to Windows (Startup-folder shortcut, no admin needed)."""
+    from jarvis.ui import autostart as auto
+
+    if action == "on":
+        lnk = auto.enable(mode)
+        typer.echo(f"Autostart ON — {lnk}\nJarvis will start (no console window) at sign-in; quit him from the tray icon.")
+    elif action == "off":
+        typer.echo("Autostart OFF — shortcut removed." if auto.disable() else "Autostart was already off.")
+    else:
+        typer.echo(f"Autostart: {auto.status()}")
 
 
 @app.command()

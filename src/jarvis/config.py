@@ -90,6 +90,8 @@ class ToolsCfg(BaseModel):
 class MemoryCfg(BaseModel):
     db_path: str = "data/jarvis.db"
     history_turns: int = 12
+    # On start, resume the conversation if the last exchange is younger than this (0 = always start fresh).
+    resume_hours: float = 6
 
 
 class LoggingCfg(BaseModel):

@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections import deque
+from collections.abc import Callable
 from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -39,6 +40,7 @@ class Hub:
         self.history: deque[dict[str, Any]] = deque(maxlen=40)  # replayed to late-joining clients
         self.pending_confirm: dict[str, Any] | None = None  # so a (re)connecting HUD can still show the buttons
         self.pipeline = None  # set by the app once the voice pipeline exists
+        self.on_shutdown: Callable[[], None] | None = None  # set by the app; lets `POST /shutdown` stop the process
         bus.on(None, self._on_event)
 
     # ---- bus → clients -------------------------------------------------------------------------

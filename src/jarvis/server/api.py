@@ -59,6 +59,15 @@ def build_app(settings: Settings, hub: Hub, agent) -> FastAPI:
             await hub.pipeline.interrupt()
         return {"ok": True}
 
+    @app.post("/shutdown")
+    async def shutdown() -> dict[str, bool]:
+        """Graceful stop, used by the HUD launcher when the window quits (server is loopback-only)."""
+        if hub.on_shutdown is None:
+            return {"ok": False}
+        logger.info("shutdown requested over HTTP")
+        hub.on_shutdown()
+        return {"ok": True}
+
     if (HUD_DIST / "index.html").exists():
         app.mount("/assets", StaticFiles(directory=HUD_DIST / "assets"), name="assets")
 
@@ -82,9 +91,20 @@ def build_app(settings: Settings, hub: Hub, agent) -> FastAPI:
 
 
 async def serve(app: FastAPI, host: str, port: int) -> None:
-    """Run uvicorn inside the existing asyncio loop (shares it with the voice pipeline)."""
-    config = uvicorn.Config(app, host=host, port=port, log_level="warning", loop="none", lifespan="off", ws_ping_interval=20, ws_ping_timeout=20)
+    """Run uvicorn inside the existing asyncio loop (shares it with the voice pipeline).
+
+    `log_config=None`: uvicorn's default logging config builds a stderr formatter, which raises under pythonw.exe
+    (no console → `sys.stderr is None`) and silently killed the server on Windows autostart. Its loggers are quiet
+    at WARNING anyway; anything important surfaces through our own loguru log.
+    """
+    config = uvicorn.Config(
+        app, host=host, port=port, log_level="warning", log_config=None, access_log=False, loop="none", lifespan="off", ws_ping_interval=20, ws_ping_timeout=20
+    )
     server = uvicorn.Server(config)
     server.install_signal_handlers = lambda: None  # the main app handles Ctrl+C
     logger.info("HUD server on http://{}:{}", host, port)
-    await server.serve()
+    try:
+        await server.serve()
+    except Exception:
+        logger.exception("HUD server failed to start on {}:{} (port in use?)", host, port)
+        raise

@@ -65,7 +65,8 @@ tools:
 
 memory:
   db_path: data/jarvis.db
-  history_turns: 12
+  history_turns: 12        # exchanges kept in the LLM context
+  resume_hours: 6          # on start, continue the conversation if the last exchange is this recent (0 = fresh every start)
 
 logging:
   level: INFO

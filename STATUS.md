@@ -3,8 +3,8 @@
 Voice-first, local-first Windows assistant with full PC control and an Iron Man HUD.
 Design: [`PLAN.md`](PLAN.md) · Setup/usage: [`README.md`](README.md) · Root: `C:\Users\Mori\jarvis`
 
-**Last updated: 2026-10-10 (session 2, Phase 4 done).** This file is the single source of truth for *what exists, how it works,
-what was measured, and why decisions were made*. It is updated at the end of every phase.
+**Last updated: 2026-10-10 (session 2, Phases 4 and 5 done — all planned phases complete).** This file is the single source of
+truth for *what exists, how it works, what was measured, and why decisions were made*. It is updated at the end of every phase.
 
 ---
 
@@ -17,21 +17,26 @@ what was measured, and why decisions were made*. It is updated at the end of eve
 | 2 | Voice loop: wake word → VAD → Whisper → intents/LLM → Kokoro, barge-in, hot window | ✅ done, verified live |
 | 3 | Full PC-control tool suite (47 tools) + confirmations + reminders/memory + vision | ✅ done, 22/22 LLM test |
 | 4 | Iron Man HUD: FastAPI/WebSocket hub + Three.js reactor + PySide6 transparent overlay, text & image input | ✅ done, verified live |
-| 5 | Persistence, autostart, polish | 🔄 in progress |
+| 5 | Conversation persistence across restarts, start-with-Windows, two-process launcher, boot-time fix | ✅ done, verified live |
 
 Run it today:
 
 ```powershell
 cd C:\Users\Mori\jarvis
 uv run jarvis doctor        # health check
-uv run jarvis run           # FULL: voice + HUD overlay (tray icon; Ctrl+Shift+J to type; Ctrl+Shift+H hide/show)
-uv run jarvis run --no-ui   # voice only, no window — HUD still available at http://127.0.0.1:8765/
+uv run jarvis run           # FULL: HUD overlay + voice backend (tray icon; Ctrl+Shift+J to type; Ctrl+Shift+H hide/show)
+uv run jarvis run --no-ui   # backend only (voice + HUD server) — HUD still available at http://127.0.0.1:8765/
 uv run jarvis hud           # window only, attaches to a running backend
 uv run jarvis chat          # text REPL with full PC control
 uv run jarvis say "Good evening, sir."   # hear the voice
+uv run jarvis autostart on  # start at Windows sign-in (no console window); `off` / `status`
 ```
 
 First time only: `cd hud; npm install; npm run build` (the HUD is a Vite build; `jarvis doctor` checks for it).
+
+**Open for your decision (nothing blocks on these):** (1) run `jarvis autostart on` if you want him at sign-in — I left it
+OFF; (2) `memory.resume_hours: 6` is how long a conversation survives a restart — raise/lower to taste; (3) voice is still
+`bm_george`; try `uv run jarvis say "..."` after editing `tts.voice` (bm_lewis, bf_emma, am_michael, …).
 
 ---
 
@@ -53,9 +58,11 @@ First time only: `cd hud; npm install; npm run build` (the HUD is a Vite build; 
 | D12 | **Boot does not wait for the LLM** (2026-10-09) | After a reboot Ollama needs 60–90 s to load a model from a cold disk, then ~12 s one-off warmup. Jarvis now says "Systems online" as soon as audio is ready (~30 s), fast-path greetings work immediately, and if you ask something before the model is up he says "my language model is still loading" and answers when it is. |
 | D13 | **Jarvis starts Ollama itself if it isn't running** (2026-10-09) | Ollama was not in your Windows startup list after the reboot. `llm/ollama.py` launches the tray app and waits for the API. A keep-alive ping every 10 min keeps the model in VRAM while Jarvis runs. |
 | D14 | **Live context goes in the user message, not the system prompt** | Keeps the system prompt + tool schemas byte-identical across turns so Ollama's prompt cache hits: 1,550 prompt tokens are re-used in 0.03 s instead of re-evaluated in 0.5 s. |
-| D16 | **HUD talks to the backend only over the local WebSocket** (2026-10-10) | QtWebEngine must own the main thread, so the asyncio backend runs in a thread; rather than share objects across threads, the window is just another WebSocket client. Result: the same HUD runs in a browser tab, `jarvis hud` can attach to a running `jarvis run --no-ui`, and scripts get `/chat` for free. |
-| D17 | **Transparency via an alpha-from-brightness post pass instead of dropping bloom** (2026-10-10) | Bloom is what makes it look like the films, but Three's bloom pass writes alpha = 1 everywhere. Since the whole scene is light on black, brightness is a faithful coverage value; one 6-line shader restores transparency and keeps the glow. |
 | D15 | **Native Ollama client for local models; LiteLLM only for cloud** (2026-10-09) | Root-caused a recurring ~2.1 s first-token stall: LiteLLM rebuilds its HTTP client whenever its pooled connection has been idle > 5 s (slow on Windows), and imports in 2.5 s. Direct `/api/chat` over one persistent `httpx` connection: **41–100 ms** to first token for text, 230–430 ms for tool calls (Ollama emits the call once its JSON is complete), 75–85 tok/s generation, plus server-side stats (`prompt_eval`, `load_duration`) in the debug log. `llm/ollama.py` → `OllamaClient`; conversions for tool-call arguments (object vs string), tool results and images live in `to_ollama_messages()`. |
+| D16 | **HUD talks to the backend only over the local WebSocket** (2026-10-10) | QtWebEngine must own the main thread, so the backend cannot share it; rather than share objects across threads/processes, the window is just another WebSocket client. Result: the same HUD runs in a browser tab, `jarvis hud` can attach to a running `jarvis run --no-ui`, and scripts get `/chat` for free. (Originally the backend was a *thread* of the window process — superseded by D18.) |
+| D17 | **Transparency via an alpha-from-brightness post pass instead of dropping bloom** (2026-10-10) | Bloom is what makes it look like the films, but Three's bloom pass writes alpha = 1 everywhere. Since the whole scene is light on black, brightness is a faithful coverage value; one 6-line shader restores transparency and keeps the glow. |
+| D18 | **The voice backend is a child *process* of the HUD window, not a thread** (2026-10-10) | Measured: with the backend inside the Qt process every model load was ~1.6× slower (audio stack 16–18 s vs 10 s). Root cause, isolated by five controlled runs (§9): a *visible* Chromium view raises the Windows timer resolution to 1 ms (per-process on Win 11) and Qt/Chromium threads then share the process with Python's GIL, so the four model-loading threads get force-switched 3× more often. Window hidden → fast; window in another process → fast; `--no-ui` with `timeBeginPeriod(1)` forced → slow. `ui/launcher.py` now spawns `python -m jarvis run --no-ui` inside a Job Object (kill-on-close: the backend can never outlive the window), supervises it (restart ×3 on crash), and stops it gracefully via `POST /shutdown`. Bonus: a Chromium/GPU-driver crash in the window no longer kills the assistant. |
+| D19 | **Conversation persistence = replay the last N turns from SQLite if the last one is < `resume_hours` old** (2026-10-10) | Simplest thing that makes "what did I just ask?" work after a restart (or an autostart at sign-in resuming last night's thread) without summarisation machinery. Only user/assistant text is stored, never tool payloads; a `system` marker row written by `/reset` is a hard boundary. 6 h default: long enough for a reboot, short enough that yesterday's context doesn't confuse today's first question. |
 
 ### Questions I had for you — answered by default, change if you disagree
 1. **Voice**: kept `bm_george`. Listen to the four `data/voice_bm_*.wav` samples and tell me if you prefer another.
@@ -100,19 +107,25 @@ First time only: `cd hud; npm install; npm run build` (the HUD is a Vite build; 
                                                        Tool registry (apps, files, browser, system, …)
                                                           │ confirm? ──► spoken yes/no  (or HUD buttons)
                                               EventBus → Hub → WebSocket 127.0.0.1:8765 → HUD (Qt overlay / browser)
-                                                                       ◄── typed text, images, confirm, wake, interrupt
+                                                                      ◄── typed text, images, confirm, wake, interrupt
+
+ Processes (D18):   [window: pythonw/python -m jarvis run]  ──spawns, Job Object, POST /shutdown──►  [backend: python -m jarvis run --no-ui]
+                     PySide6 + QtWebEngine, tray, hotkeys        ◄──────────── WebSocket ────────────   everything drawn above
+                     logs/hud.log                                                                        logs/jarvis.log, data/jarvis.db
 ```
 
 ### Source map (`src/jarvis/`)
 
 | File | Role | Key ideas |
 |---|---|---|
-| `__main__.py` | CLI (`doctor`, `chat`, `run`, `say`) | Forces UTF-8 console (Windows cp1252 crashed on `▸`). |
+| `__main__.py` | CLI (`doctor`, `chat`, `run`, `hud`, `autostart`, `say`) | Forces UTF-8 console (Windows cp1252 crashed on `▸`). |
 | `config.py` | Typed settings (pydantic) from `config/settings.yaml` + `permissions.yaml`; env overrides `JARVIS__SECTION__KEY` | `load_persona()` fills `config/persona.md`. |
 | `events.py` | Typed events + `EventBus` (async pub/sub) | `state`, `wake`, `transcript.*`, `assistant.*`, `audio.level`, `mic.level`, `tool.*`, `confirm.*`, `metrics`. The HUD consumes these verbatim. |
-| `logging_setup.py` | loguru console + rotating file `logs/jarvis.log` | `reapply()` exists because **kokoro calls `logger.remove()` on import** and wipes all sinks. |
-| `doctor.py` | Health checks | GPU kernel smoke test (not just "is CUDA visible"). |
-| `app.py` | Boot wiring | Loads TTS/STT/wake/VAD in parallel threads; LLM warms in background; keep-alive. |
+| `logging_setup.py` | loguru console (skipped under `pythonw`) + rotating file `logs/jarvis.log` (`logs/hud.log` for the window process) | `reapply()` exists because **kokoro calls `logger.remove()` on import** and wipes all sinks. |
+| `doctor.py` | Health checks | GPU kernel smoke test (not just "is CUDA visible"); checks the HUD build exists. |
+| `app.py` | Boot wiring of the **backend process**; `main()` is also the launcher entry | Loads TTS/STT/wake/VAD in parallel threads; LLM warms in background; keep-alive; `_spawn()` logs background-task failures instead of letting them die silently; `request_stop()` for `POST /shutdown`. |
+| `ui/launcher.py` | `BackendProcess`: spawn `jarvis run --no-ui` as a child, Job Object kill-on-close, supervise/restart, graceful stop (D18) | Picks `python.exe` even when the window runs under `pythonw.exe`; no console window for the child when autostarted. |
+| `ui/autostart.py` | Start-with-Windows via a Startup-folder shortcut to `pythonw.exe -m jarvis run` | No admin, no Task Scheduler; `enable/disable/status`. |
 | `voice.py` | **The state machine** (IDLE→LISTENING→THINKING→SPEAKING→hot window) | Frame loop never blocks on speech; drains stale mic frames so Jarvis never transcribes himself; wake word works in every state (barge-in). |
 | `audio/input.py` | `sounddevice` capture → asyncio queue; 400 ms preroll ring | |
 | `audio/wakeword.py` | openWakeWord ONNX wrapper; downloads models to `models/openwakeword/` | 2 s cooldown after a hit. |
@@ -122,7 +135,7 @@ First time only: `cd hud; npm install; npm run build` (the HUD is a Vite build; 
 | `tts/` | `kokoro.py`, `openai_tts.py`, `elevenlabs.py`, `speaker.py` | `Speaker` streams sentence-by-sentence; `clean_for_speech()` fixes "PC", "%", paths, URLs for pronunciation. |
 | `llm/router.py` | Model router: `ollama/*` → native `OllamaClient`; anything else → LiteLLM | Strips `<think>` blocks; rescues tool calls emitted as JSON text; per-call timeout; fallback model. |
 | `llm/ollama.py` | Ollama lifecycle (`ensure_running`, `/api/ps`) + `OllamaClient` streaming `/api/chat` | Persistent keep-alive connection, `think:false`, `keep_alive`, `num_ctx`, server timing stats (D15). |
-| `llm/agent.py` | Tool-calling loop | **Bluff guard**: if the model says "Opening X…" without calling a tool, the text is held back and the model is nudged once to actually call it. |
+| `llm/agent.py` | Tool-calling loop; vision turns; conversation persistence (D19) | **Bluff guard**: if the model says "Opening X…" without calling a tool, the text is held back and the model is nudged once to actually call it. `_restore_history()` on start, `_persist()` per turn, `reset()` writes a boundary marker. |
 | `llm/intents.py` | Fast-path regexes + greeting templates | 4 day-parts × 3–4 variants; yes/no classifier for confirmations. |
 | `llm/chunker.py` | Sentence splitter for streaming TTS | Handles "3.5", "p.m.", abbreviations. |
 | `llm/context.py` | Live context (time, battery, active window) | Stable part → system prompt; volatile part → user message (D14). |
@@ -135,8 +148,8 @@ First time only: `cd hud; npm install; npm run build` (the HUD is a Vite build; 
 | `tools/media.py`, `windows.py`, `power.py`, `network.py`, `inputs.py`, `screen.py`, `shell.py`, `web.py`, `memory.py`, `reminders.py` | Phase 3 control suite — see §7 | |
 | `memory/store.py`, `memory/scheduler.py` | SQLite facts/reminders/messages; 1 s poll → `reminder.due` events | |
 | `server/hub.py` | WebSocket hub: EventBus → all HUD clients; HUD commands → pipeline | Per-client queue + writer task (ordering, back-pressure); `hello` with history + pending confirm. |
-| `server/api.py` | FastAPI app: `/ws`, `/health`, `/chat`, `/confirm`, `/interrupt`, static `hud/dist` | uvicorn runs inside the backend's asyncio loop (`loop="none"`). |
-| `ui/window.py` | PySide6 shell: frameless/transparent/on-top `QWebEngineView`, tray, hotkeys, modes | Compact mode is click-through via Win32 `WS_EX_TRANSPARENT`; drag to move in panel mode. |
+| `server/api.py` | FastAPI app: `/ws`, `/health`, `/chat`, `/confirm`, `/interrupt`, `/shutdown`, static `hud/dist` | uvicorn runs inside the backend's asyncio loop (`loop="none"`, `log_config=None` — its default logging config crashes under `pythonw`). |
+| `ui/window.py` | PySide6 shell: frameless/transparent/on-top `QWebEngineView`, tray, hotkeys, modes; 2 s supervision tick | Compact mode is click-through via Win32 `WS_EX_TRANSPARENT`; drag to move in panel mode. |
 | `hud/src/scene.ts` | Three.js reactor: particle sphere shader, rings, ticks, core, waveform ring, bloom + alpha pass | `setState / setSpeechLevel / setMicLevel / pulse`. |
 | `hud/src/main.ts`, `ws.ts`, `style.css` | DOM panels, typed WS client with reconnect/backoff, state colours, modes | `?mode=` and `?bg=1` (opaque background for browser dev) URL options. |
 
@@ -290,19 +303,21 @@ Three parts, each independently useful:
 ### How it fits together (and why Qt owns the main thread)
 
 ```
- jarvis run ─┬─ main thread: Qt event loop → HudWindow (QWebEngineView → http://127.0.0.1:8765/?mode=compact)
-             │                                  ▲ tray menu / hotkeys (pynput thread → Qt Signal)
-             └─ "jarvis-backend" thread: asyncio loop
+ jarvis run ── window process: Qt event loop → HudWindow (QWebEngineView → http://127.0.0.1:8765/?mode=compact)
+      │                           ▲ tray menu / hotkeys (pynput thread → Qt Signal)      logs/hud.log
+      └─ spawns ── backend process: `python -m jarvis run --no-ui`  (asyncio loop)       logs/jarvis.log
                    ├─ uvicorn (FastAPI) ── /ws ──► Hub ── per-client asyncio.Queue ── writer task ──► HUD
                    │                        ◄── {"type":"text"|"image"|"confirm"|"wake"|"interrupt"}
                    ├─ EventBus.on(None, hub._on_event)   # every event → JSON → all clients
                    └─ VoicePipeline / Agent / tools (unchanged from Phases 2–3)
 ```
 
-QtWebEngine insists on living in the main thread, so with the HUD enabled the whole Phase 2–3 backend runs in a
-daemon thread (`app.main`). The two halves talk **only** through the local WebSocket/HTTP server — a clean seam that
-also means you can run them separately: `jarvis run --no-ui` + `jarvis hud` (or a browser tab), which is how the
-HUD was developed. Quitting from the tray calls `JarvisApp.request_stop()` (cancels all backend tasks → mic/TTS close).
+QtWebEngine insists on living in the main thread, so the backend cannot share the window's main thread. In Phase 4 it
+ran as a daemon *thread* of the window process; Phase 5 measurements showed that slowed every model load ~1.6×, so it
+is now a child *process* (D18, details in §9). The two halves talk **only** through the local WebSocket/HTTP server —
+a clean seam that also means you can run them separately: `jarvis run --no-ui` + `jarvis hud` (or a browser tab),
+which is how the HUD was developed. Quitting from the tray → `POST /shutdown` → `JarvisApp.request_stop()` (cancels
+all backend tasks → mic/TTS close) → backend exits in ~0.1 s.
 
 ### WebSocket protocol (`ws://127.0.0.1:8765/ws`)
 
@@ -369,6 +384,7 @@ transcript bubbles + typewriter streaming + cursor; tool chip `▸ open_app: Spo
 **Live test** (`jarvis run`, real models, real Kokoro):
 - Boot: Qt window up **0.4–0.5 s** after launch, server 0.4 s later, HUD connected ~1 s after that (boot sequence
   plays while models load). Audio stack ready in **29–33 s** warm (68 s the first time after reboot — Kokoro 49 s cold).
+  *Phase 5 note: these boots ran the backend inside the Qt process; after D18 the same warm boot is **10.6 s**.*
 - Typed "Tell me about the arc reactor in three sentences." → spoken + streamed on the HUD: first token 112–134 ms,
   turn 2.0–2.7 s; the compact reactor pulsed with the real voice.
 - Image drop (142 KB JPEG screenshot of the desktop) → "The screen displays a text editor with a project titled
@@ -413,10 +429,76 @@ transcript bubbles + typewriter streaming + cursor; tool chip `▸ open_app: Spo
   live because every confirm-tier tool has a real side effect (lock/sleep/close…). The button calls the same
   `resolve_confirm_external()` the voice path uses.
 - In `cinematic` mode the window covers the whole screen and is *not* click-through — use it for show, `compact` for work.
-- Between "Kokoro loaded" and "audio stack ready" there is a 16 s gap on warm boots (HF Hub voice check + warm-up synth); a Phase 5 item.
+- ~~Between "Kokoro loaded" and "audio stack ready" there is a 16 s gap on warm boots~~ — investigated and fixed in Phase 5
+  (it was two things: a one-off first-synthesis cost, and the in-process Qt slowdown — see §9).
 
-## 9. Phase 5 — Persistence, autostart, polish
-*(pending)*
+## 9. Phase 5 — Persistence, autostart, two-process launcher (done 2026-10-10, verified live)
+
+### What was built
+
+| Part | Where | What it does |
+|---|---|---|
+| **Conversation persistence** | `llm/agent.py` (`_restore_history`, `_persist`, `reset`), `memory/store.py` (`messages` table), `config.py` (`memory.resume_hours`) | Every completed turn (typed, spoken or image) is written to SQLite as a `user` + `assistant` row (the assistant row's `meta` holds the model name). On start the agent reloads the last `history_turns × 2` rows **if the newest is younger than `resume_hours` (6 h)**, so Jarvis can answer "what was the codeword I gave you?" after a restart or sign-in. `/reset` in `jarvis chat` writes a `system` marker row and nothing before it is ever restored. Tool calls/results are not persisted (they are large, and stale tool output after a restart would mislead the model). |
+| **Start with Windows** | `ui/autostart.py`, CLI `jarvis autostart on|off|status` | Creates `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\JARVIS.lnk` → `.venv\Scripts\pythonw.exe -m jarvis run [--mode X]`, working dir = repo. `pythonw` = no console window; the backend child then also runs windowless (`CREATE_NO_WINDOW`) and logs to file only. No admin rights, no Task Scheduler; delete the shortcut (or `autostart off`) to undo. **Left OFF** — your call. |
+| **Two-process launcher** | `ui/launcher.py`, `app.main`, `server/api.py` (`POST /shutdown`), `hub.on_shutdown` | `jarvis run` is now the *window* process; it spawns `python -m jarvis run --no-ui` as the *backend*. Job Object with `KILL_ON_JOB_CLOSE` → the backend dies with the window no matter how the window dies (Task Manager included; verified). 2 s supervision tick restarts a crashed backend (3 s delay, max 3). Tray *Quit* → `POST /shutdown` → clean stop in ~0.1 s, else terminate after 5 s. Window logs to `logs/hud.log`, backend to `logs/jarvis.log` (two processes rotating one file would corrupt it). |
+| **pythonw crash fixes** | `server/api.py`, `app.py` (`_spawn`), `logging_setup.py` | Under `pythonw.exe` `sys.stderr is None`; uvicorn's default logging config then raises `ValueError: Unable to configure formatter 'default'` and — because it was a bare `create_task` — the HUD server silently never started (the HUD showed "disconnected" forever while voice still worked). Fixed with `log_config=None`, and every background task now goes through `_spawn()`, which logs a traceback if a task dies. |
+| **Boot-time measurement** | `tts/base.py` (warm-up timing log) | `tts warmup synthesis (incl. model load) took N s` in the debug log, so the Kokoro cost is visible per boot. |
+
+### The boot-time investigation (why the backend is a process now)
+
+The Phase 4 log always showed a 13–16 s gap between "Kokoro loaded" and "audio stack ready". Reproducing it in a
+standalone script gave a surprise: Kokoro's first synthesis took **10 s** twice in a row… and then 1.7–2.8 s in every
+later run (with or without `HF_HUB_OFFLINE=1` — the voice-pack check is 0.24 s and not the culprit). Torch has native
+sm_120 kernels, so it is not a PTX JIT either; the first-use cost is almost certainly cuDNN/cuBLAS libraries (~1 GB of
+DLLs) being paged in after large model loads evicted them — a one-off per session, not something to engineer around.
+
+That left a second, consistent effect, isolated with five controlled runs (warm caches, same minute, same browser tab
+connected throughout):
+
+| Run | Window | Audio stack ready | Kokoro load |
+|---|---|---|---|
+| `jarvis run --no-ui` | none | **10.8 s** | 7.9 s |
+| `jarvis run` (Phase 4: backend thread inside the Qt process), window visible | in-process | **16.3 s** (pythonw: 17.9 s) | 13.3 s |
+| same, but `win.show()` skipped (Qt + page loaded, nothing on screen) | in-process, hidden | 9.7 s | 7.9 s |
+| `jarvis hud` in another process + `jarvis run --no-ui` | separate process, visible | 9.8 s | 7.9 s |
+| `--no-ui` + `timeBeginPeriod(1)` forced via ctypes (no window at all) | none | 12.9 s | 10.0 s |
+| in-process visible + `sys.setswitchinterval(0.05)` | in-process | 13.3 s | 10.7 s |
+
+Reading: it is not GPU contention (a visible window in *another* process costs nothing), and it is not Python callbacks
+from Qt (none fire at frame rate — PySide caches "no override" per virtual). A **visible** Chromium view requests a 1 ms
+Windows timer resolution; on Windows 11 that is per-process, and it alone costs +2–3 s (row 5) because Python's GIL
+switch timeout (5 ms) is honoured 3× more often, forcing the four model-loading threads to hand the GIL around far more.
+The rest is Qt/Chromium browser-side threads competing in the same process. Moving the backend out of the window
+process removes both at once → **10.6 s with the window visible** (and 11.2 s under `pythonw`), from 16–18 s.
+
+### Test results (all on the real stack, 2026-10-10 01:10–01:40)
+
+| Test | Result |
+|---|---|
+| Persist: typed turn via WS → `messages` table | rows `user` / `assistant ("Done, sir.")`, `meta = ollama/qwen3:8b` |
+| Resume: restart, ask "what was the codeword?" | log `resumed conversation: 2 messages, last one 0 min ago`; answer **"Pelican, sir."**; new rows persisted (ids 3–4), again after the 2nd restart (5–6) |
+| Restore/reset logic (scratch copy of the DB, incl. WAL) | 6 restored → `reset()` → new agent restores 0 → one fresh turn → restores 2 ✓ |
+| `pythonw.exe -m jarvis run --mode compact` (autostart path) | window up 0.33–0.56 s; backend in `python.exe` with no console; audio stack 11.2 s; typed turn answered + persisted; desktop capture shows the compact reactor over the browser HUD |
+| `POST /shutdown` | backend exits code 0 in 0.1 s; launcher logs *"backend exited… restarting in 3 s"* and restarts it (supervisor path) |
+| Kill the window process (`Stop-Process`) | whole backend tree gone within 4 s (Job Object, including the uv trampoline's grandchild `python.exe`); port 8765 free |
+| `autostart on/off/status` | shortcut created with the right target/args/working dir, removed cleanly; status reports correctly |
+| Lint | `ruff check` clean on all touched files (project ignores aside) |
+
+### Bugs found & fixed in Phase 5
+1. **HUD server never started under `pythonw`** (autostart would have shipped a HUD that says "disconnected" forever) — uvicorn's logging config needs a stderr. `log_config=None`.
+2. **Background task failures were invisible** — `create_task` without a done-callback. `_spawn()` logs them.
+3. **`/reset` did not survive restarts** — in-memory clear only; now writes a `system` boundary row that `_restore_history` honours.
+4. **Model loads 1.6× slower with the HUD** — root-caused and fixed by the process split (above).
+5. **Two processes, one log file** — avoided up front: the window process logs to `logs/hud.log`.
+
+### Known limitations (Phase 5)
+- The uv venv's `python.exe` is a trampoline that spawns the real interpreter, so the backend is two processes
+  (trampoline + interpreter); the Job Object covers both. If a future uv changes this, nothing breaks.
+- `/shutdown` is unauthenticated — fine because the server binds to 127.0.0.1 only; do not change `ui.host` to
+  `0.0.0.0` without adding a token.
+- Persistence stores plain text in `data/jarvis.db`; anything you say to Jarvis is on disk until you delete the DB
+  (or set `memory.resume_hours: 0` to stop restoring — rows are still written, so you keep a searchable transcript).
+- `jarvis hud` attached to a backend you started yourself does **not** stop that backend when the window quits (by design).
 
 ---
 
@@ -438,13 +520,18 @@ transcript bubbles + typewriter streaming + cursor; tool chip `▸ open_app: Spo
 | Different hotkeys | `ui.hotkey_text_input`, `ui.hotkey_toggle_hud` (pynput syntax, e.g. `<ctrl>+<alt>+j`) |
 | HUD too bright / too subtle | `hud/src/scene.ts`: `setSpeechLevel` gain (1.1), bloom strength (`0.4 + level*0.4`), particle `uAlpha` (0.28); then `cd hud; npm run build` + tray → Reload HUD |
 | Develop the HUD with hot reload | `uv run jarvis run --no-ui` in one terminal, `cd hud; npm run dev` in another → http://localhost:5173/?bg=1 |
+| Start Jarvis at Windows sign-in | `uv run jarvis autostart on` (`--mode panel` optional); `off` removes the shortcut; `status` shows it |
+| Forget conversations faster / never resume | `memory.resume_hours: 1` (or `0` = always start fresh); `/reset` in `jarvis chat` also draws a hard line |
+| More / less conversation memory per turn | `memory.history_turns: 12` (pairs of messages kept in the prompt and restored on start) |
+| Window-side logs (tray, hotkeys, backend restarts) | `logs/hud.log` (backend: `logs/jarvis.log`) |
 
 ---
 
 ## 11. Git history
 
 ```
-(working tree)  Phase 4: WebSocket hub + FastAPI, Three.js HUD, PySide6 overlay, vision_swap, docs
+(working tree)  Phase 5: conversation persistence, autostart, two-process launcher (D18), pythonw fixes, docs
+9be730b  Phase 4: WebSocket hub + FastAPI, Three.js HUD, PySide6 overlay, vision_swap, docs
 d09ed55  Phase 3: full PC control, memory, reminders, vision
 a4a2600  Phase 2 complete: native Ollama client, voice fixes, boot order, docs
 f0b0d5b  (your commit, titled "Phase 0 and partial Phase 1") — actually Phase 2 voice code + STATUS.md

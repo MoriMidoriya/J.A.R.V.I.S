@@ -290,8 +290,9 @@ Permission tiers in `config/permissions.yaml`:
 - **Reduced-motion / performance:** 60 fps target; DPR cap; pause rendering when hidden.
 
 > **As built (2026-10-10):** sizes are 340×340 / 520×760; mode cycling added (`Ctrl+Shift+M`). Two deviations worth
-> knowing: (1) QtWebEngine must own the main thread, so the asyncio backend runs in a daemon thread and the window is
-> simply another WebSocket client of `127.0.0.1:8765` — nothing is shared across threads; (2) `UnrealBloomPass`
+> knowing: (1) QtWebEngine must own the main thread, so the backend cannot share it; the window is simply another
+> WebSocket client of `127.0.0.1:8765` — nothing is shared (Phase 4 used a backend *thread*, Phase 5 made it a child
+> *process* because the in-process Qt window slowed model loading 1.6× — STATUS.md D18); (2) `UnrealBloomPass`
 > writes alpha = 1 everywhere, which would make the window an opaque black square, so a final shader pass derives
 > alpha from brightness (glow-on-black ⇒ brightness = coverage). Chromatic aberration / glitch effects were left out
 > (scanlines + boot sequence are in). Details, measurements and bugs in `STATUS.md` §8.
@@ -304,6 +305,12 @@ Permission tiers in `config/permissions.yaml`:
 - SQLite: `conversations`, `messages`, `facts`, `reminders`, `tool_log`.
 - Context window management: last N turns + summarized older history.
 - Optional semantic recall with `sqlite-vec` + a small local embedding model (`nomic-embed-text` via Ollama).
+
+> **As built (2026-10-10):** tables are `facts`, `reminders`, `messages` (no separate `conversations`/`tool_log` —
+> the shell tool keeps its own audit log). Conversation continuity is the simple version: the last `history_turns`
+> pairs are replayed from `messages` on start if the newest is under `memory.resume_hours` (6 h) old; a `system` marker
+> row from `/reset` is a hard boundary. Summarised older history and semantic recall were **not** built — facts
+> ("remember that…") cover the "long-term" need for v1, and the 32k context holds a long session as-is. STATUS.md D19.
 
 ---
 
@@ -425,6 +432,12 @@ Each phase ends with something you can run and test. I'll pause for your feedbac
 - Comm-link voice FX, greeting variety, personality tuning, error handling ("I'm afraid Spotify isn't installed, sir").
 - Start-with-Windows option, single-exe packaging option (PyInstaller) for later.
 - **Checkpoint:** daily-driver quality.
+
+> **As built (2026-10-10):** vision + facts + reminders landed early (Phase 3); Phase 5 delivered conversation
+> persistence across restarts, `jarvis autostart on|off|status`, the two-process launcher (D18) that cut warm boot
+> from 16–18 s to ~11 s, and the `pythonw` fixes autostart needed. Not done, deliberately: semantic recall and
+> summarised history (see 5.10), comm-link voice FX (would need a DSP pass over Kokoro's output — a Phase 6 candidate),
+> PyInstaller packaging (the uv venv + Startup shortcut already gives a one-click start).
 
 ### Phase 6 — Stretch (as desired)
 - Streaming STT (Moonshine) for live captions while you talk.
