@@ -530,7 +530,7 @@ process removes both at once → **10.6 s with the window visible** (and 11.2 s 
 ## 11. Git history
 
 ```
-(working tree)  Phase 5: conversation persistence, autostart, two-process launcher (D18), pythonw fixes, docs
+18e257c  Phase 5: conversation persistence, autostart, two-process launcher (D18), pythonw fixes, docs
 9be730b  Phase 4: WebSocket hub + FastAPI, Three.js HUD, PySide6 overlay, vision_swap, docs
 d09ed55  Phase 3: full PC control, memory, reminders, vision
 a4a2600  Phase 2 complete: native Ollama client, voice fixes, boot order, docs
