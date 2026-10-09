@@ -10,10 +10,14 @@ assistant:
   language: en
 
 llm:
-  primary: ollama/qwen3:14b      # any LiteLLM model string
-  fast: ollama/qwen3:8b          # used for short/simple turns and intent classification
+  # Any LiteLLM model string. Measured 2026-10-09 on the RTX 5070 Ti (12 GB):
+  #   ollama/qwen3:8b   11/12 commands correct, ~0.3-0.6 s/turn, 5 GB VRAM  <- default (leaves room for Whisper+Kokoro+HUD on GPU)
+  #   ollama/qwen3:14b  11/12 commands correct, ~0.5-0.9 s/turn, 10 GB VRAM (tight; Whisper may spill to CPU)
+  #   anthropic/claude-sonnet-4-5, openai/gpt-4.1-mini, gemini/gemini-2.5-flash, groq/llama-3.3-70b-versatile (need keys in .env)
+  primary: ollama/qwen3:8b
+  fast: ollama/qwen3:8b          # reserved for short internal calls (classification, summaries)
   vision: ollama/qwen2.5vl:7b    # used when an image / screenshot is attached
-  fallback: null                 # e.g. anthropic/claude-sonnet-4-5 (needs ANTHROPIC_API_KEY in .env)
+  fallback: null                 # e.g. anthropic/claude-sonnet-4-5 — used if primary errors/times out
   temperature: 0.6
   max_tokens: 400
   request_timeout_s: 60

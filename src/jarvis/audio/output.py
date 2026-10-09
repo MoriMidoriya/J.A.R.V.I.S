@@ -94,21 +94,27 @@ class AudioPlayer:
                 continue
             self._playing.set()
             self._idle.clear()
-            for i in range(0, len(audio), block):
+            try:
+                for i in range(0, len(audio), block):
+                    if self._cancel.is_set():
+                        break
+                    chunk = audio[i : i + block]
+                    if len(chunk) < block:
+                        chunk = np.pad(chunk, (0, block - len(chunk)))
+                    stream.write(chunk)
+                    now = time.perf_counter()
+                    if now - last_level >= self._level_interval:
+                        last_level = now
+                        self._emit_level(float(np.sqrt(np.mean(chunk**2))))
                 if self._cancel.is_set():
-                    break
-                chunk = audio[i : i + block]
-                if len(chunk) < block:
-                    chunk = np.pad(chunk, (0, block - len(chunk)))
-                stream.write(chunk)
-                now = time.perf_counter()
-                if now - last_level >= self._level_interval:
-                    last_level = now
-                    self._emit_level(float(np.sqrt(np.mean(chunk**2))))
-            if self._cancel.is_set():
-                # tiny fade to avoid a click
-                stream.write(np.zeros(block, dtype=np.float32))
-                self._emit_level(0.0)
+                    # tiny fade to avoid a click
+                    stream.write(np.zeros(block, dtype=np.float32))
+                    self._emit_level(0.0)
+            except Exception as e:  # noqa: BLE001  (stream closed during interpreter shutdown, device unplugged…)
+                logger.warning("audio output stopped: {}", e)
+                self._playing.clear()
+                self._idle.set()
+                return
 
     def _emit_level(self, rms: float) -> None:
         if self.on_level:

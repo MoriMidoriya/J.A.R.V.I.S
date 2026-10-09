@@ -224,16 +224,19 @@ jarvis/
 - **Cloud:** OpenAI `gpt-4o-transcribe`/`whisper-1`, Groq Whisper (very fast, free tier) via key.
 - Risk: CTranslate2 wheels must support Blackwell (sm_120). Phase 0 verifies; if not, use `whisper` via PyTorch (torch 2.7+ supports Blackwell) or Moonshine.
 
-### 5.4 LLM router — LiteLLM
-- One config string per provider: `ollama/qwen3:14b`, `anthropic/claude-sonnet-4-5`, `openai/gpt-4.1-mini`, `gemini/gemini-2.5-flash`, `groq/llama-3.3-70b-versatile`, `openrouter/…`.
+### 5.4 LLM router — native Ollama client + LiteLLM for cloud
+- One config string per provider: `ollama/qwen3:8b`, `anthropic/claude-sonnet-4-5`, `openai/gpt-4.1-mini`, `gemini/gemini-2.5-flash`, `groq/llama-3.3-70b-versatile`, `openrouter/…`.
 - `llm.primary` + `llm.fallback` (e.g. local first, cloud fallback on timeout).
 - Per-task routing: `llm.fast` (intent/short answers), `llm.smart` (complex/tool-heavy), `llm.vision`.
+- **Revised 2026-10-09:** `ollama/*` models bypass LiteLLM and use our own streaming client (`llm/ollama.py`).
+  Measured: LiteLLM added ~2.1 s to the first token whenever its connection had been idle > 5 s (client rebuild is
+  slow on Windows) plus a 2.5 s import. Native path: 40–250 ms to first token. LiteLLM remains for cloud providers.
 - Local model recommendations for 12 GB:
-  - `qwen3:14b` — best overall tool calling & reasoning (Q4_K_M, 9.3 GB). Use `/no_think` for speed on simple turns.
-  - `qwen3:8b` — 2× faster, fine for most commands.
-  - `qwen2.5vl:7b` — vision.
-  - Ollama flags: `OLLAMA_FLASH_ATTENTION=1`, `OLLAMA_KV_CACHE_TYPE=q8_0`, `num_ctx` 8k–16k.
-- VRAM budget when all local: LLM 9.3 + Whisper 1.6 + Kokoro 0.4 ≈ 11.3 GB → tight. Options: use `qwen3:8b` (5.2 GB) as default local, or run Whisper int8 on CPU (still fast), or let Ollama unload between turns. Decided in Phase 2 after measuring.
+  - **`qwen3:8b` — default** (Q4_K_M, 5.2 GB; 6.3 GB resident with 8k context). Measured 11/12 commands correct, 0.3–0.6 s per tool round, 75–85 tok/s.
+  - `qwen3:14b` — marginally better reasoning (11/12 on the same set), 10 GB resident → leaves no headroom for Whisper + Kokoro + HUD. Opt-in.
+  - `qwen2.5vl:7b` — vision (loaded on demand, swapped by Ollama).
+  - Thinking mode is disabled per request (`think: false`); Ollama flags `OLLAMA_FLASH_ATTENTION=1`, `OLLAMA_KV_CACHE_TYPE=q8_0` are optional extras.
+- VRAM budget **as measured with everything resident**: qwen3:8b 6.3 GB + Whisper 1.5 GB + Kokoro 0.4 GB ≈ 8.4 GB of 12.2 GB → comfortable. Decision: `qwen3:8b` default (see STATUS.md D2).
 
 ### 5.5 Tools (the "full control over PC" part)
 
@@ -444,7 +447,7 @@ Total to a polished v1 (Phases 0–5): roughly 7–10 focused build days.
 
 ## 10. Decisions (approved 2026-09-10)
 
-1. **Default brain:** local-first — `ollama/qwen3:14b` primary, `qwen3:8b` fast; cloud providers available via `.env` keys.
+1. **Default brain:** local-first — `ollama/qwen3:8b` primary and fast (revised from 14b on 2026-10-09 after measuring, see §5.4 and STATUS.md D2); cloud providers available via `.env` keys.
 2. **HUD tooling:** Node.js installed; HUD built with Vite + TypeScript + Three.js.
 3. **File search:** Everything installed; Windows Search index as fallback.
 4. **Voice:** Kokoro British male (local, free); ElevenLabs/OpenAI TTS optional via key.

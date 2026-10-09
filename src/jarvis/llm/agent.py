@@ -10,7 +10,7 @@ from typing import Any
 from loguru import logger
 
 from jarvis.config import Settings, load_persona
-from jarvis.events import AssistantFinal, AssistantToken, EventBus, Metrics, State, StateChanged
+from jarvis.events import AssistantFinal, AssistantToken, EventBus, Metrics
 from jarvis.llm.context import build_context, build_stable_context
 from jarvis.llm.router import LLMRouter
 from jarvis.tools.registry import ToolRegistry
@@ -92,7 +92,6 @@ class Agent:
     ) -> str:
         """Run one user turn to completion. Streams reply text via `on_text` and the event bus."""
         t_start = time.perf_counter()
-        await self.bus.emit(StateChanged(state=State.THINKING))
 
         chosen = model or self.model_override or (self.s.llm.vision if image_b64 and self.s.llm.vision else self.s.llm.primary)
         system = {"role": "system", "content": load_persona(self.s, build_stable_context())}
@@ -119,7 +118,10 @@ class Agent:
             result = await self.router.stream_with_fallback(messages, tools=tools, model=chosen, on_text=gate.feed)
             if first_token_ms is None:
                 first_token_ms = result.first_token_ms
-            logger.debug("llm round {} model={} text={!r} tool_calls={}", round_no, result.model, result.text[:80], [tc.name for tc in result.tool_calls])
+            logger.debug(
+                "llm round {} model={} first_token={} ms total={} ms text={!r} tool_calls={}",
+                round_no, result.model, result.first_token_ms, result.total_ms, result.text[:80], [tc.name for tc in result.tool_calls],
+            )
 
             if not result.tool_calls:
                 if gate.held and not nudged and tools is not None:

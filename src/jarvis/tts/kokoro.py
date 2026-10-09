@@ -51,8 +51,12 @@ class KokoroTTS(TTSEngine):
         if self._pipe is None:
             t0 = time.perf_counter()
             import torch
-            from kokoro import KPipeline
 
+            from jarvis.logging_setup import reapply, sinks_frozen
+
+            with sinks_frozen():  # kokoro calls logger.remove()/add() at import; keep our console+file sinks intact
+                from kokoro import KPipeline
+            reapply()  # belt and braces
             device = "cuda" if torch.cuda.is_available() else "cpu"
             self._pipe = KPipeline(lang_code=self.lang_code, repo_id="hexgrad/Kokoro-82M", device=device)
             logger.info("Kokoro loaded on {} in {:.1f}s (voice {})", device, time.perf_counter() - t0, self.voice)

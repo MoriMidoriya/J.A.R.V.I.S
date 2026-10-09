@@ -32,7 +32,7 @@ class AssistantCfg(BaseModel):
 
 
 class LLMCfg(BaseModel):
-    primary: str = "ollama/qwen3:14b"
+    primary: str = "ollama/qwen3:8b"
     fast: str | None = "ollama/qwen3:8b"
     vision: str | None = "ollama/qwen2.5vl:7b"
     fallback: str | None = None

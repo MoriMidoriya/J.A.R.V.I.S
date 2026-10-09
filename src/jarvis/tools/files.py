@@ -153,9 +153,9 @@ def search_paths(query: str, kind: Kind = "any", folder: str | None = None, when
 
 @tool(summary="Search: {query}")
 def search_files(
-    query: Annotated[str, Field(description="Words from the file/folder name, e.g. 'interstellar', 'tax pdf 2025'. Keep it short; omit words like 'file' or 'folder'.")],
+    query: Annotated[str, Field(description="Distinctive words likely in the file/folder NAME: project names, titles, years, e.g. 'jarvis plan', 'interstellar', 'tax 2025'. Drop generic words like 'file', 'document', 'folder', 'the'.")],
     kind: Annotated[Kind, Field(description="Filter by type")] = "any",
-    folder: Annotated[str | None, Field(description="Limit to a folder: 'downloads', 'desktop', 'documents', 'videos', or an absolute path")] = None,
+    folder: Annotated[str | None, Field(description="Only if the user explicitly says 'in my downloads/desktop/documents/videos' or gives a path. The word 'document' in a request is NOT a folder. Otherwise null = whole PC.")] = None,
     when: Annotated[When, Field(description="Modified-time filter")] = "any",
     sort: Annotated[Sort, Field(description="recent = newest first (default), largest = biggest first")] = "recent",
 ) -> list[dict[str, Any]]:
@@ -163,8 +163,13 @@ def search_files(
     if not query.strip() and not folder:
         raise ToolError("Give me at least a word to search for.")
     res = search_paths(query, kind, folder, when, sort)
+    if not res and folder and query.strip():
+        # The model often over-restricts to a folder; widen to the whole PC before giving up.
+        res = search_paths(query, kind, None, when, sort)
+        if res:
+            logger.info("search_files: nothing in {!r}; widened to whole PC ({} hits)", folder, len(res))
     if not res:
-        raise ToolError(f"Nothing found for '{query}'" + (f" in {folder}" if folder else "") + ".")
+        raise ToolError(f"Nothing found for '{query}'" + (f" in {folder} or anywhere else" if folder else "") + ".")
     return res
 
 

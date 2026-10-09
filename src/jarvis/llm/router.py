@@ -1,7 +1,7 @@
-"""LiteLLM-backed model router. One `stream()` call works for Ollama, Anthropic, OpenAI, Gemini, Groq, OpenRouter…
+"""Model router. One `stream()` call works for Ollama, Anthropic, OpenAI, Gemini, Groq, OpenRouter…
 
-Model strings follow LiteLLM conventions; `ollama/<model>` is rewritten to `ollama_chat/<model>` so native tool
-calling is used.
+`ollama/<model>` goes through our native `OllamaClient` (persistent connection, streamed tool calls, server stats —
+see `llm/ollama.py` for why). Everything else goes through LiteLLM using its model-string conventions.
 """
 
 from __future__ import annotations
@@ -9,13 +9,14 @@ from __future__ import annotations
 import json
 import re
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from loguru import logger
 
 from jarvis.config import Settings
+from jarvis.llm.ollama import OllamaClient, OllamaStats
 
 THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
 
@@ -34,6 +35,7 @@ class LLMResult:
     first_token_ms: int | None = None
     total_ms: int = 0
     model: str = ""
+    stats: OllamaStats | None = None  # server-side timing (local models only)
 
     def as_assistant_message(self) -> dict[str, Any]:
         msg: dict[str, Any] = {"role": "assistant", "content": self.text or None}
@@ -90,6 +92,7 @@ class LLMRouter:
     def __init__(self, settings: Settings) -> None:
         self.s = settings
         self._litellm: Any = None
+        self.ollama = OllamaClient(settings.llm.ollama_base_url, num_ctx=settings.llm.ollama_num_ctx, keep_alive=settings.llm.ollama_keep_alive)
 
     # ---- setup ---------------------------------------------------------------------------------
     def _lib(self) -> Any:
@@ -136,9 +139,72 @@ class LLMRouter:
         on_text: Callable[[str], Awaitable[None] | None] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        timeout: float | None = None,
     ) -> LLMResult:
-        litellm = self._lib()
         model = model or self.s.llm.primary
+        kw = dict(tools=tools, on_text=on_text, max_tokens=max_tokens or self.s.llm.max_tokens,
+                  temperature=self.s.llm.temperature if temperature is None else temperature,
+                  timeout=timeout or self.s.llm.request_timeout_s)
+        if self.is_local(model):
+            return await self._stream_ollama(model, messages, **kw)
+        return await self._stream_litellm(model, messages, **kw)
+
+    async def _stream_ollama(self, model: str, messages: list[dict[str, Any]], *, tools, on_text, max_tokens, temperature, timeout) -> LLMResult:
+        t0 = time.perf_counter()
+        filt = ThinkFilter()
+        clean = ""
+
+        async def push(s: str) -> None:
+            nonlocal clean
+            if not s:
+                return
+            clean += s
+            if on_text:
+                r = on_text(s)
+                if r is not None and hasattr(r, "__await__"):
+                    await r
+
+        async def on_delta(d: str) -> None:
+            await push(filt.feed(d))
+
+        raw_text, raw_calls, stats, first = await self.ollama.chat_stream(
+            model.split("/", 1)[1], messages, tools=tools or None, on_text=on_delta,
+            temperature=temperature, max_tokens=max_tokens, timeout=timeout,
+        )
+        await push(filt.flush())
+        tool_calls = [
+            ToolCallReq(
+                id=c.get("id") or f"call_{i}",
+                name=c["function"]["name"],
+                arguments=a if isinstance(a := c["function"].get("arguments", {}), str) else json.dumps(a),
+            )
+            for i, c in enumerate(raw_calls)
+        ]
+        text = THINK_RE.sub("", clean).strip()
+        tool_calls, text = self._rescue_text_tool_call(tool_calls, text)
+        if stats.load_s > 0.5:
+            logger.info("ollama (re)loaded {} in {:.1f}s", model, stats.load_s)
+        logger.debug(
+            "ollama {}: prompt {} tok (uncached eval {:.2f}s), gen {} tok @ {:.0f} tok/s, first token {} ms",
+            model, stats.prompt_tokens, stats.prompt_eval_s, stats.gen_tokens, stats.tok_per_s, first,
+        )
+        return LLMResult(text=text, tool_calls=tool_calls, first_token_ms=first, total_ms=int((time.perf_counter() - t0) * 1000), model=model, stats=stats)
+
+    @staticmethod
+    def _rescue_text_tool_call(tool_calls: list[ToolCallReq], text: str) -> tuple[list[ToolCallReq], str]:
+        """Some local models emit tool calls as JSON text instead of structured calls; rescue them."""
+        if not tool_calls and text.strip().startswith("{") and '"name"' in text:
+            try:
+                obj = json.loads(text.strip())
+                if isinstance(obj, dict) and "name" in obj:
+                    args = obj.get("arguments") or obj.get("parameters") or {}
+                    return [ToolCallReq(id="call_0", name=obj["name"], arguments=json.dumps(args))], ""
+            except json.JSONDecodeError:
+                pass
+        return tool_calls, text
+
+    async def _stream_litellm(self, model: str, messages: list[dict[str, Any]], *, tools, on_text, max_tokens, temperature, timeout) -> LLMResult:
+        litellm = self._lib()
         lm, extra = self.resolve(model)
         if self.wants_no_think(model) and messages and messages[0]["role"] == "system":
             messages = [{**messages[0], "content": messages[0]["content"] + "\n\n/no_think"}, *messages[1:]]
@@ -164,9 +230,9 @@ class LLMRouter:
             messages=messages,
             tools=tools or None,
             stream=True,
-            max_tokens=max_tokens or self.s.llm.max_tokens,
-            temperature=self.s.llm.temperature if temperature is None else temperature,
-            timeout=self.s.llm.request_timeout_s,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            timeout=timeout,
             **extra,
         )
         async for chunk in resp:
@@ -189,27 +255,18 @@ class LLMRouter:
         except Exception as e:  # noqa: BLE001
             logger.warning("stream_chunk_builder failed: {}", e)
 
-        # Some local models emit tool calls as JSON text instead of structured calls; rescue them.
-        if not tool_calls and text.strip().startswith("{") and '"name"' in text:
-            try:
-                obj = json.loads(text.strip())
-                if isinstance(obj, dict) and "name" in obj:
-                    tool_calls.append(ToolCallReq(id="call_0", name=obj["name"], arguments=json.dumps(obj.get("arguments") or obj.get("parameters") or {})))
-                    text = ""
-            except json.JSONDecodeError:
-                pass
-
+        tool_calls, text = self._rescue_text_tool_call(tool_calls, THINK_RE.sub("", text).strip())
         return LLMResult(
-            text=THINK_RE.sub("", text).strip(),
+            text=text,
             tool_calls=tool_calls,
             first_token_ms=first,
             total_ms=int((time.perf_counter() - t0) * 1000),
             model=model,
         )
 
-    async def complete(self, messages: list[dict[str, Any]], *, model: str | None = None, max_tokens: int = 200) -> str:
+    async def complete(self, messages: list[dict[str, Any]], *, model: str | None = None, max_tokens: int = 200, timeout: float | None = None) -> str:
         """Non-streaming convenience for small internal calls."""
-        r = await self.stream(messages, model=model, max_tokens=max_tokens)
+        r = await self.stream(messages, model=model, max_tokens=max_tokens, timeout=timeout)
         return r.text
 
     async def stream_with_fallback(self, *args: Any, **kwargs: Any) -> LLMResult:
@@ -221,8 +278,3 @@ class LLMRouter:
             logger.warning("primary model failed ({}); falling back to {}", e, self.s.llm.fallback)
             kwargs["model"] = self.s.llm.fallback
             return await self.stream(*args, **kwargs)
-
-
-async def _aiter_noop() -> AsyncIterator[str]:  # pragma: no cover
-    if False:
-        yield ""

@@ -1,4 +1,20 @@
-"""Voice pipeline: mic → wake word → VAD → STT → (intent | agent) → TTS, with barge-in and a hot window."""
+"""Voice pipeline: mic → wake word → VAD → STT → (fast-path intent | agent) → TTS, with barge-in and a hot window.
+
+State machine (see events.State):
+
+    IDLE ──wake──► LISTENING ──utterance──► THINKING ──first token──► SPEAKING ──done──► LISTENING (hot window)
+      ▲                │ silence                                          │ wake (barge-in)        │ hot window expires
+      └────────────────┴──────────────────────────────────────────────────┴────────────────────────┘
+
+    CONFIRMING: a tool needs a yes/no; we speak the question and listen for the answer.
+
+Design rules:
+- The frame loop (`run`) must never block on speech; anything that speaks runs in a separate task (`_turn`).
+- Frames captured while Jarvis is speaking are never fed to the VAD/STT (half-duplex); the mic queue is drained
+  whenever we start listening so Jarvis does not transcribe his own voice.
+- The wake word is detected in every state, so "Hey Jarvis" always interrupts (barge-in), with a slightly higher
+  threshold while speaking to avoid false triggers from Jarvis's own audio.
+"""
 
 from __future__ import annotations
 
@@ -12,18 +28,30 @@ from jarvis.audio.input import MicInput, rms_level
 from jarvis.audio.vad import SileroVAD, Utterance
 from jarvis.audio.wakeword import WakeWord
 from jarvis.config import Settings
-from jarvis.events import EventBus, Metrics, MicLevel, Notice, State, StateChanged, TranscriptFinal, WakeDetected
+from jarvis.events import AssistantFinal, EventBus, Metrics, MicLevel, Notice, State, StateChanged, TranscriptFinal, WakeDetected
 from jarvis.llm import intents
 from jarvis.llm.agent import Agent
 from jarvis.stt.base import STTEngine
 from jarvis.tts.speaker import Speaker
 
 WAKE_ONLY_AFTER_S = 1.6  # "Yes, sir?" if nothing is said this long after the wake word
-NO_SPEECH_GIVE_UP_S = 7.0  # stop listening if still nothing after the prompt
+NO_SPEECH_GIVE_UP_S = 7.0  # stop listening if still nothing this long after the prompt
+PREROLL_S = 0.15  # audio kept from just before the wake word fired (so the first syllable isn't lost)
 
 
 class VoicePipeline:
-    def __init__(self, settings: Settings, bus: EventBus, agent: Agent, stt: STTEngine, speaker: Speaker, mic: MicInput, wake: WakeWord, vad: SileroVAD) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        bus: EventBus,
+        agent: Agent,
+        stt: STTEngine,
+        speaker: Speaker,
+        mic: MicInput,
+        wake: WakeWord,
+        vad: SileroVAD,
+        llm_ready: asyncio.Event | None = None,
+    ) -> None:
         self.s = settings
         self.bus = bus
         self.agent = agent
@@ -32,18 +60,25 @@ class VoicePipeline:
         self.mic = mic
         self.wake = wake
         self.vad = vad
+        self.llm_ready = llm_ready or asyncio.Event()
+        if llm_ready is None:
+            self.llm_ready.set()
         self.state = State.BOOTING
         self._turn: asyncio.Task | None = None
         self._listen_since = 0.0
-        self._awaiting_first = False  # first utterance right after a wake word
-        self._prompted = False
-        self._hot_window = False
+        self._awaiting_first = False  # waiting for the first utterance right after a wake word
+        self._prompted = False  # already said "Yes, sir?" for this wake
+        self._hot_window = False  # listening without a wake word, right after a reply
         self._confirm_fut: asyncio.Future[str] | None = None
         self._frame_i = 0
+        self._wake_threshold = wake.threshold
+        self._wake_threshold_speaking = min(0.9, wake.threshold + 0.2)
+        self.last_stt_ms: int | None = None
 
     # ---- state ---------------------------------------------------------------------------------
     async def set_state(self, st: State) -> None:
         if st != self.state:
+            logger.debug("state {} -> {}", self.state, st)
             self.state = st
             await self.bus.emit(StateChanged(state=st))
 
@@ -70,39 +105,57 @@ class VoicePipeline:
                 await self._on_utterance(utt)
                 return
             await self._check_listen_timeouts()
-            # Wake word while listening (user restarts): treat as a fresh start.
-            if not self.vad.speaking and self.wake.detect(frame):
-                await self._on_wake(0.0, restart=True)
+            # Saying the wake word again while we listen restarts the capture.
+            if not self.vad.speaking and self.wake.detect(frame) is not None:
+                await self._on_wake(1.0)
             return
 
         # IDLE / THINKING / SPEAKING: only the wake word matters (barge-in while speaking/thinking).
+        self.wake.threshold = self._wake_threshold_speaking if st in (State.SPEAKING, State.THINKING) else self._wake_threshold
         score = self.wake.detect(frame)
         if score is not None:
             await self._on_wake(score)
 
     # ---- wake ----------------------------------------------------------------------------------
-    async def _on_wake(self, score: float, restart: bool = False) -> None:
-        logger.info("wake word ({:.2f}){}", score, " [barge-in]" if self.state in (State.SPEAKING, State.THINKING) else "")
+    async def _on_wake(self, score: float) -> None:
+        interrupting = self.state in (State.SPEAKING, State.THINKING, State.CONFIRMING)
+        logger.info("wake word ({:.2f}){}", score, " [barge-in]" if interrupting else "")
         await self.bus.emit(WakeDetected(score=score))
         self._cancel_turn()
         self.speaker.cancel()
+        self._resolve_confirm("")  # an interrupted confirmation counts as "no"
         await self._start_listening(first=True)
 
-    async def _start_listening(self, first: bool, hot: bool = False) -> None:
+    async def _start_listening(self, first: bool, hot: bool = False, prompted: bool = False) -> None:
+        self._drain_mic()
         pre = self.mic.preroll()
-        self.vad.reset(preroll=pre[-int(16000 * 0.25) :] if first else None)
+        self.vad.reset(preroll=pre[-int(16000 * PREROLL_S) :] if first and not prompted else None)
         self._listen_since = time.monotonic()
         self._awaiting_first = first
-        self._prompted = False
+        self._prompted = prompted
         self._hot_window = hot
         await self.set_state(State.LISTENING)
 
+    def _drain_mic(self) -> None:
+        """Drop frames captured while we were speaking/thinking so Jarvis never transcribes himself."""
+        n = 0
+        while True:
+            try:
+                self.mic.queue.get_nowait()
+                n += 1
+            except asyncio.QueueEmpty:
+                break
+        if n:
+            logger.debug("drained {} stale mic frames", n)
+
     async def _check_listen_timeouts(self) -> None:
-        if self.vad.speaking or self.state == State.CONFIRMING:
-            if self.state == State.CONFIRMING and not self.vad.speaking and time.monotonic() - self._listen_since > self.s.tools.confirm_timeout_s:
-                self._resolve_confirm("")
+        if self.vad.speaking:
             return
         waited = time.monotonic() - self._listen_since
+        if self.state == State.CONFIRMING:
+            if waited > self.s.tools.confirm_timeout_s:
+                self._resolve_confirm("")
+            return
         if self._hot_window:
             if waited > self.s.assistant.hot_window_seconds:
                 await self._go_idle()
@@ -110,14 +163,17 @@ class VoicePipeline:
         if self._awaiting_first and not self._prompted and waited > WAKE_ONLY_AFTER_S:
             self._prompted = True
             reply = intents.match("", self.s)
-            await self._speak_then_listen(reply.reply if reply else "Yes, sir?", first=True)
+            self._run_turn(self._prompt_turn(reply.reply if reply else f"Yes, {self.s.assistant.user_title}?"))
             return
         if waited > NO_SPEECH_GIVE_UP_S:
+            logger.info("nothing heard; back to idle")
             await self._go_idle()
 
     async def _go_idle(self) -> None:
         self.vad.reset()
         self.wake.reset()
+        self._hot_window = False
+        self._awaiting_first = False
         await self.set_state(State.IDLE)
 
     # ---- utterance -----------------------------------------------------------------------------
@@ -127,37 +183,63 @@ class VoicePipeline:
         await self.set_state(State.THINKING)
         tr = await asyncio.to_thread(self.stt.transcribe, utt.audio)
         stt_ms = int((time.perf_counter() - t0) * 1000)
+        self.last_stt_ms = stt_ms
         logger.info("heard ({:.1f}s audio, {} ms stt): {!r}", utt.duration_s, stt_ms, tr.text)
 
         if was_confirming:
             self._resolve_confirm(tr.text)
             return
         if tr.empty:
-            await self._start_listening(first=self._awaiting_first, hot=self._hot_window)
+            # Nothing intelligible (e.g. just the wake word). Keep listening; the 1.6 s prompt still applies.
+            await self._start_listening(first=self._awaiting_first, hot=self._hot_window, prompted=self._prompted)
             return
         await self.bus.emit(TranscriptFinal(text=tr.text, source="voice"))
         await self.handle_text(tr.text, stt_ms=stt_ms)
 
     async def handle_text(self, text: str, *, stt_ms: int | None = None) -> None:
-        """Route a user utterance (voice or typed) to a fast-path intent or the agent."""
+        """Route a user utterance (voice or typed) to a fast-path intent or the LLM agent. Never blocks."""
         intent = intents.match(text, self.s)
         if intent is not None and intent.kind in ("greeting", "stop", "thanks"):
             logger.info("fast-path intent: {}", intent.kind)
-            self._cancel_turn()
-            self.speaker.cancel()
-            if intent.kind == "stop":
-                await self._speak_then_listen(intent.reply or "", first=False, hot=False)
-                await self._go_idle()
-            else:
-                await self.bus.emit(Metrics(model="fast-path", stt_ms=stt_ms, llm_first_token_ms=0))
-                await self._speak_then_listen(intent.reply or "", first=False, hot=True)
+            self._run_turn(self._fast_turn(intent, stt_ms))
             return
+        self._run_turn(self._agent_turn(text, stt_ms))
 
+    # ---- turns (anything that speaks runs here, never in the frame loop) ------------------------
+    def _run_turn(self, coro) -> None:  # noqa: ANN001
         self._cancel_turn()
-        self._turn = asyncio.create_task(self._agent_turn(text, stt_ms))
+        self.speaker.cancel()
+        self._turn = asyncio.create_task(coro)
+
+    def _cancel_turn(self) -> None:
+        if self._turn and not self._turn.done():
+            self._turn.cancel()
+        self._turn = None
+
+    async def _fast_turn(self, intent: intents.Intent, stt_ms: int | None) -> None:
+        t0 = time.perf_counter()
+        reply = intent.reply or ""
+        await self.bus.emit(AssistantFinal(text=reply))
+        await self.set_state(State.SPEAKING)
+        await self.speaker.say(reply)
+        await self.bus.emit(Metrics(model="fast-path", stt_ms=stt_ms, llm_first_token_ms=0, tts_first_audio_ms=self.speaker.first_audio_ms, total_ms=int((time.perf_counter() - t0) * 1000)))
+        if intent.kind == "stop":
+            await self._go_idle()
+        else:
+            await self._start_listening(first=False, hot=True)
+
+    async def _prompt_turn(self, text: str) -> None:
+        await self.set_state(State.SPEAKING)
+        await self.speaker.say(text)
+        await self._start_listening(first=True, prompted=True)
 
     async def _agent_turn(self, text: str, stt_ms: int | None) -> None:
         await self.set_state(State.THINKING)
+        if not self.llm_ready.is_set():
+            await self.set_state(State.SPEAKING)
+            await self.speaker.say(f"One moment, {self.s.assistant.user_title} — my language model is still loading.")
+            await self.set_state(State.THINKING)
+            await self.llm_ready.wait()
         utter = self.speaker.begin()
         spoke = False
 
@@ -172,34 +254,25 @@ class VoicePipeline:
             await self.agent.respond(text, on_text=on_text)
             await self.set_state(State.SPEAKING)
             await utter.finish()
+            logger.info("voice turn: stt {} ms, first audio {} ms after LLM start", stt_ms, self.speaker.first_audio_ms)
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001
             logger.exception("agent turn failed")
             await self.bus.emit(Notice(level="error", text=str(e)))
             self.speaker.cancel()
-            await self.speaker.say("I'm afraid something went wrong on my end, sir.")
+            await self.speaker.say(f"I'm afraid something went wrong on my end, {self.s.assistant.user_title}.")
         if not utter.cancelled:
             await self._start_listening(first=False, hot=True)
 
-    def _cancel_turn(self) -> None:
-        if self._turn and not self._turn.done():
-            self._turn.cancel()
-        self._turn = None
-
-    async def _speak_then_listen(self, text: str, first: bool, hot: bool = True) -> None:
-        if text:
-            await self.set_state(State.SPEAKING)
-            await self.speaker.say(text)
-        await self._start_listening(first=first, hot=hot)
-
     # ---- confirmations (voice yes/no) ----------------------------------------------------------
     async def confirm(self, _id: str, prompt: str) -> bool:
-        """Registry confirm handler: speak the question, listen for yes/no."""
+        """Registry confirm handler: speak the question, listen for yes/no (two attempts)."""
         for attempt in range(2):
             self.speaker.cancel()
             await self.set_state(State.SPEAKING)
-            await self.speaker.say(prompt if attempt == 0 else "Sorry, sir — was that a yes or a no?")
+            await self.speaker.say(prompt if attempt == 0 else f"Sorry, {self.s.assistant.user_title} — was that a yes or a no?")
+            self._drain_mic()
             self.vad.reset()
             self._listen_since = time.monotonic()
             self._confirm_fut = asyncio.get_running_loop().create_future()
@@ -211,10 +284,12 @@ class VoicePipeline:
             finally:
                 self._confirm_fut = None
             await self.set_state(State.THINKING)
-            verdict = intents.classify_yes_no(answer) if answer else False
+            verdict = intents.classify_yes_no(answer) if answer else None
             logger.info("confirmation answer {!r} -> {}", answer, verdict)
             if verdict is not None:
                 return verdict
+            if not answer:
+                return False  # silence / interrupted = no
         return False
 
     def _resolve_confirm(self, text: str) -> None:

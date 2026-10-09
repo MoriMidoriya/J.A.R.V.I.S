@@ -22,6 +22,10 @@ class VADState:
     silence_ms: float = 0.0
     speech_ms: float = 0.0
     buf: list[np.ndarray] = field(default_factory=list)
+    speech_start_idx: int | None = None  # index into buf of the first speech frame
+
+
+LEAD_IN_FRAMES = 4  # ~320 ms of audio kept before the first speech frame (so soft onsets aren't clipped)
 
 
 class SileroVAD:
@@ -70,17 +74,19 @@ class SileroVAD:
         if is_speech:
             if not st.speaking:
                 st.speaking = True
+                st.speech_start_idx = len(st.buf) - 1
                 logger.debug("speech start")
             st.speech_ms += frame_ms
             st.silence_ms = 0.0
         elif st.speaking:
             st.silence_ms += frame_ms
 
-        total_s = sum(len(b) for b in st.buf) / 16000
+        speech_s = (len(st.buf) - (st.speech_start_idx or 0)) * frame_ms / 1000 if st.speaking else 0.0
         ended = st.speaking and st.silence_ms >= self.silence_ms
-        too_long = st.speaking and total_s >= self.max_utterance_s
+        too_long = st.speaking and speech_s >= self.max_utterance_s
         if ended or too_long:
-            audio = np.concatenate(st.buf)
+            start = max(0, (st.speech_start_idx or 0) - LEAD_IN_FRAMES)
+            audio = np.concatenate(st.buf[start:])
             spoke_enough = st.speech_ms >= self.min_speech_ms
             self.reset()
             if not spoke_enough:

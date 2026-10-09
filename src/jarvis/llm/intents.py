@@ -25,8 +25,12 @@ class Intent:
     reply: str | None = None
 
 
+# Whisper often renders the tail of "…Jarvis" as a short fragment ("It's", "Is", "His") or hears "service" for
+# "Jarvis". Tolerate up to two such fragments before a greeting.
+_LEAD_FRAGMENT = r"(?:(?:it'?s|is|his|hey|so|oh|um|uh|and|jarvis|service|this|yes)\W+){0,2}"
+
 GREETING_RX = re.compile(
-    r"^\W*(?:"
+    r"^\W*" + _LEAD_FRAGMENT + r"(?:"
     r"(?:daddy|papa|dad|boss|master|your (?:master|creator))(?:'?s| is)? (?:home|back|here)|"
     r"i(?:'?m| am) (?:home|back)|"
     r"(?:good |g')?(?:morning|afternoon|evening|night)(?: to you)?(?:,? jarvis)?|"

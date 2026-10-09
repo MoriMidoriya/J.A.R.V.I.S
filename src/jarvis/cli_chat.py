@@ -44,6 +44,11 @@ async def _run(model_override: str | None) -> None:
     agent = Agent(s, router, registry, bus)
     if model_override:
         agent.model_override = model_override
+    if router.is_local(agent.model_override or s.llm.primary):
+        from jarvis.llm import ollama
+
+        if not await asyncio.to_thread(ollama.ensure_running, s.llm.ollama_base_url):
+            console.print("[red]Ollama is not reachable and could not be started. Is it installed?[/]")
 
     def on_event(e: Event) -> None:
         if isinstance(e, ToolCall):

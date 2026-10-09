@@ -144,7 +144,12 @@ class ToolRegistry:
         if tier in ("confirm", "dangerous"):
             accepted = await self._confirm(call_id, spec.render(spec.confirm_prompt, args) or f"{summary}?")
             if not accepted:
-                return self._finish(call_id, name, False, "The user declined. Do not retry; acknowledge briefly.", f"{name}: declined")
+                return self._finish(
+                    call_id, name, False,
+                    f"NOT DONE: the user declined, so {name} was NOT executed and nothing changed. "
+                    "Do not retry. Tell the user you have left it as it was (e.g. 'Very well, sir, leaving it open.').",
+                    f"{name}: declined",
+                )
 
         t0 = time.perf_counter()
         try:
