@@ -153,6 +153,7 @@ class HudWindow(QWidget):
         self.mode: Mode = settings.ui.mode
         self.corner: Corner = settings.ui.corner
         self.auto_hide = settings.ui.auto_hide
+        self.text_only = settings.ui.text_only  # mirrored from the page's prefs; the tray shows a checkbox for it
         self.user_hidden = False  # explicit hide (hotkey / tray / voice / settings) — sticky
         self.auto_hidden = False  # the page asked us to hide while resting (ui.auto_hide)
         self.state = "booting"
@@ -314,8 +315,7 @@ class HudWindow(QWidget):
         if color not in self._icons:
             self._icons[color] = _reactor_icon(color)
         self.tray.setIcon(self._icons[color])
-        label = {"idle": "standby", "thinking": "processing", "confirming": "awaiting confirmation"}.get(state, state)
-        self.tray.setToolTip(f"J.A.R.V.I.S. — {label}" + ("  (HUD hidden)" if self.user_hidden else ""))
+        self._update_tooltip()
 
     def apply_prefs(self, prefs: dict[str, Any]) -> None:
         corner = prefs.get("corner")
@@ -329,6 +329,20 @@ class HudWindow(QWidget):
             if not self.auto_hide and self.auto_hidden:
                 self.auto_hidden = False
                 self._apply_visibility()
+        if "text_only" in prefs:  # mirror the pref in the tray's checkbox (set by the drawer, header, voice or the tray itself)
+            self.text_only = bool(prefs["text_only"])
+            self.act_text_only.setChecked(self.text_only)
+            self._update_tooltip()
+
+    def set_text_only(self, on: bool) -> None:
+        """Tray → page: the page sends the change to the hub like the drawer does, and it echoes back via apply_prefs."""
+        self.text_only = on
+        self._js(f"window.setPrefs && window.setPrefs({{text_only: {'true' if on else 'false'}}})")
+        self._update_tooltip()
+
+    def _update_tooltip(self) -> None:
+        label = {"idle": "standby", "thinking": "processing", "confirming": "awaiting confirmation"}.get(self.state, self.state)
+        self.tray.setToolTip(f"J.A.R.V.I.S. — {label}" + ("  · text only" if self.text_only else "") + ("  (HUD hidden)" if self.user_hidden else ""))
 
     def quit(self) -> None:
         logger.info("quit requested from the HUD")
@@ -367,6 +381,10 @@ class HudWindow(QWidget):
         st = QAction("Settings…", menu)
         st.triggered.connect(self.open_settings)
         menu.addAction(st)
+        self.act_text_only = QAction("Text only (don't speak)", menu, checkable=True)
+        self.act_text_only.setChecked(self.text_only)
+        self.act_text_only.triggered.connect(self.set_text_only)
+        menu.addAction(self.act_text_only)
         menu.addSeparator()
         mode_menu = menu.addMenu("Mode")
         for m in MODES:

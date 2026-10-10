@@ -22,6 +22,10 @@ logs/
 hud/node_modules/
 hud/dist/
 
+# working notes (kept locally, not published)
+STATUS.md
+PLAN.md
+
 # os / ide
 .DS_Store
 Thumbs.db

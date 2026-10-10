@@ -105,6 +105,10 @@ export function initSettings(root: HTMLElement, host: SettingsHost) {
     row(parent, label, wrap);
   };
 
+  // ---- voice -----------------------------------------------------------------------------------
+  const vo = section("VOICE");
+  toggle(vo, "Text-only mode", (p) => p.text_only, (v) => ({ text_only: v }), "he shows his replies instead of speaking them — still listens · “text mode” / “speak again”");
+
   // ---- overlay -------------------------------------------------------------------------------
   const ov = section("OVERLAY", "The reactor in the corner. Click-through: it never takes your mouse or keyboard.");
   const corners = el("span", "corners");
@@ -123,7 +127,7 @@ export function initSettings(root: HTMLElement, host: SettingsHost) {
   slider(ov, "Reactor size", 200, 400, 10, (p) => p.reactor_size, (v) => ({ reactor_size: v }), (v) => `${v} px`);
   slider(ov, "Brightness while idle", 10, 100, 5, (p) => Math.round(p.idle_opacity * 100), (v) => ({ idle_opacity: v / 100 }), (v) => `${v} %`);
   slider(ov, "Stay unfolded after a turn", 0, 60, 1, (p) => p.linger_s, (v) => ({ linger_s: v }), (v) => `${v} s`);
-  toggle(ov, "Conversation beside the reactor", (p) => p.show_convo, (v) => ({ show_convo: v }), "the last three lines while he's engaged");
+  toggle(ov, "Conversation beside the reactor", (p) => p.show_convo, (v) => ({ show_convo: v }), "the last three lines while he's engaged (always on in text-only mode)");
   toggle(ov, "Status word", (p) => p.show_status, (v) => ({ show_status: v }), "STANDBY · LISTENING · …");
   toggle(ov, "Hide completely while idle", (p) => p.auto_hide, (v) => ({ auto_hide: v }), "comes back on “Hey Jarvis”");
 
@@ -198,6 +202,9 @@ export function initSettings(root: HTMLElement, host: SettingsHost) {
     ["“hide yourself”", "HUD gone, still listening"],
     ["“show the full interface”", "cinematic by voice"],
     ["“back to the corner”", "compact by voice"],
+    ["“text mode” · “speak again”", "text-only mode on / off"],
+    ["“move to the top left”", "any setting above, by voice — also “bigger”,"],
+    ["“hide the clock”", "“dimmer”, “auto-hide on”, “what are your settings?”"],
     ["“power down”", "shut down Jarvis (asks first)"],
   ];
   for (const [k, v] of pairs) {

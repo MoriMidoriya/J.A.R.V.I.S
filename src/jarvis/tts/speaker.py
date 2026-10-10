@@ -27,6 +27,8 @@ class Speaker:
         self._first_audio_ms: int | None = None
         self._t0: float | None = None
         self._last_level = 0.0
+        # Text-only mode (ui.text_only): nothing is synthesised; the text still streams to the HUD. See Utterance.silent.
+        self.muted = False
 
     # ---- levels → HUD --------------------------------------------------------------------------
     def _on_level(self, lvl: float) -> None:
@@ -86,11 +88,20 @@ class Utterance:
         self.gen = speaker._gen
         self.chunker = SentenceChunker()
         self.text = ""
+        self._muted_at_begin = speaker.muted
+
+    @property
+    def silent(self) -> bool:
+        """Muted both when this utterance began *and* now. So the turn that switches text-only mode ON still speaks
+        its acknowledgement (it began unmuted), and the turn that switches it OFF is heard too (it is unmuted now)."""
+        return self._muted_at_begin and self.sp.muted
 
     def feed(self, delta: str) -> None:
         if self.gen != self.sp._gen:
             return
         self.text += delta
+        if self.silent:
+            return
         for sentence in self.chunker.feed(delta):
             self._schedule(sentence)
 
@@ -101,7 +112,7 @@ class Utterance:
 
     async def finish(self) -> None:
         """Flush remaining text, wait for synthesis and playback to complete (or cancellation)."""
-        if self.gen == self.sp._gen:
+        if self.gen == self.sp._gen and not self.silent:
             for sentence in self.chunker.flush():
                 self._schedule(sentence)
         pend = [f for f in self.sp._pending]

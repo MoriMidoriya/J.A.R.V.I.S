@@ -87,6 +87,10 @@ ui:
     pipeline: true               # last turn's latencies
   cinematic_dim: 0.45            # 0-0.9 how much cinematic mode darkens the desktop behind it
   scanlines: true                # cinematic scanline overlay
+  text_only: false               # true = Jarvis never speaks; replies/confirmations/reminders show on the HUD only (he still
+                                 # listens). Toggle: drawer, header speaker icon, tray, or "text mode" / "speak again" by voice.
+  # Every preference above can also be changed by voice ("move to the top left", "bigger", "hide the clock", "auto-hide on",
+  # "what are your settings?") — the hud_settings tool goes through the same validated path as the drawer.
 
 tools:
   everything_path: C:\Program Files\Everything\Everything.exe

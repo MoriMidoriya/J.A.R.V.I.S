@@ -57,7 +57,12 @@ class JarvisApp:
         self.pipeline: VoicePipeline | None = None
         self.loop: asyncio.AbstractEventLoop | None = None
         self.hub = Hub(settings, self.bus)
-        hud_tools.set_hooks(stop_backend=self.request_stop, window_attached=lambda: self.hub.window_attached)  # "power down" by voice
+        hud_tools.set_hooks(  # "power down", "text mode", "move to the top left"… by voice
+            stop_backend=self.request_stop,
+            window_attached=lambda: self.hub.window_attached,
+            set_prefs=self.hub.set_prefs,
+            current_prefs=lambda: self.s.ui,
+        )
         self.reminders = ReminderService(self.bus)
         self.llm_ready = asyncio.Event()
         self._bg: list[asyncio.Future] = []

@@ -134,6 +134,7 @@ class ToolRegistry:
             args = spec.params_model(**raw_args).model_dump()
         except ValidationError as e:
             msg = "; ".join(f"{'.'.join(map(str, err['loc']))}: {err['msg']}" for err in e.errors())
+            logger.warning("tool {} rejected args {}: {}", name, json.dumps(raw_args, ensure_ascii=False)[:300], msg)
             return ToolOutcome(False, f"Invalid arguments: {msg}", f"{name}: invalid args")
 
         summary = spec.render(spec.summary, args)

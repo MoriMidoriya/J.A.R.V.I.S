@@ -123,10 +123,15 @@ class UICfg(BaseModel):
     tiles: dict[str, bool] = Field(default_factory=lambda: dict.fromkeys(TILES, True))  # per-instrument switches
     cinematic_dim: float = Field(0.45, ge=0.0, le=0.9)  # how much the full-screen mode darkens the desktop behind it
     scanlines: bool = True  # cinematic mode only
+    # Text-only mode: Jarvis never speaks — replies (and confirmations, reminders) appear on the HUD only. He still
+    # listens. Toggled from the settings drawer, the header, the tray or by voice ("text mode" / "speak again").
+    text_only: bool = False
 
 
 # Keys of UICfg that the HUD may change at runtime and that are persisted to data/ui.json.
-UI_PREF_KEYS = ("corner", "idle_opacity", "linger_s", "reactor_size", "show_convo", "show_status", "auto_hide", "widgets", "tiles", "cinematic_dim", "scanlines")
+UI_PREF_KEYS = (
+    "corner", "idle_opacity", "linger_s", "reactor_size", "show_convo", "show_status", "auto_hide", "widgets", "tiles", "cinematic_dim", "scanlines", "text_only",
+)
 UI_PREFS_PATH = DATA_DIR / "ui.json"
 
 

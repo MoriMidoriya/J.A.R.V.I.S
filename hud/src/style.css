@@ -90,6 +90,17 @@ body[data-state="thinking"] #state-dot { animation: dot 0.35s ease-in-out infini
 .hbtns { display: flex; gap: 4px; margin-left: 16px; }
 .hbtn { font: inherit; font-size: 13px; width: 26px; height: 24px; padding: 0; line-height: 1; cursor: pointer; border: 1px solid transparent; background: transparent; color: var(--accent); opacity: 0.6; transition: opacity 0.2s, border-color 0.2s; }
 .hbtn:hover { opacity: 1; border-color: var(--line); text-shadow: 0 0 8px var(--accent); }
+.hbtn svg { display: block; margin: 0 auto; }
+/* text-only mode: the speaker icon gets its slash, the sound waves go, the badge appears after the state word */
+#hb-mute .slash { display: none; }
+body.text-only #hb-mute { opacity: 1; border-color: var(--line); }
+body.text-only #hb-mute .slash { display: block; }
+body.text-only #hb-mute .waves { display: none; }
+#text-badge { display: none; margin-left: 10px; padding: 1px 6px; font-size: 9px; letter-spacing: 0.22em; border: 1px solid var(--line); color: var(--accent); opacity: 0.85; }
+body.text-only #text-badge { display: inline-block; }
+#text-badge::before { content: "TEXT ONLY"; }
+body.compact.text-only.no-status #head { visibility: visible; } /* keep the badge even when the status word is off… */
+body.compact.text-only.no-status #state-dot, body.compact.text-only.no-status #state-text { display: none; } /* …by hiding just the word */
 body.panel #head { cursor: move; } /* drag the window by its header (bridge.beginDrag) */
 body.panel #head .hbtn { cursor: pointer; }
 

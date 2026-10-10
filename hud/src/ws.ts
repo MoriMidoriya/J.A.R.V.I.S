@@ -20,6 +20,7 @@ export type UiPrefs = {
   tiles: Record<TileKind, boolean>;
   cinematic_dim: number;
   scanlines: boolean;
+  text_only: boolean; // Jarvis shows his replies instead of speaking them (he still listens)
 };
 
 export type UiCommand = { type: "ui.command"; action: "show" | "hide" | "mode" | "shutdown"; mode: Mode | null };

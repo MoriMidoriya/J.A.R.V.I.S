@@ -90,6 +90,18 @@ class VoicePipeline:
         self.last_stt_ms: int | None = None
         self._announce_queue: list[str] = []  # reminders that came due while we were busy
         self.bus.on("reminder.due", self._on_reminder_due)
+        # Text-only mode: the HUD's settings drawer / tray / the text_mode tool change ui.text_only through the hub,
+        # which broadcasts the new prefs on the bus; we mirror it onto the speaker.
+        self.speaker.muted = settings.ui.text_only
+        self.bus.on("ui.prefs", self._on_ui_prefs)
+        if self.speaker.muted:
+            logger.info("text-only mode: replies are shown on the HUD, not spoken")
+
+    def _on_ui_prefs(self, ev) -> None:
+        muted = bool(ev.prefs.get("text_only", self.speaker.muted))
+        if muted != self.speaker.muted:
+            self.speaker.muted = muted
+            logger.info("text-only mode {}", "on — replies are shown, not spoken" if muted else "off — voice back on")
 
     # ---- state ---------------------------------------------------------------------------------
     async def set_state(self, st: State) -> None:

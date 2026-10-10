@@ -30,6 +30,7 @@ const el = {
   stateText: $("#state-text"),
   stateDot: $("#state-dot"),
   head: $("#head"),
+  hbMute: $<HTMLButtonElement>("#hb-mute"),
   hbSettings: $<HTMLButtonElement>("#hb-settings"),
   hbExpand: $<HTMLButtonElement>("#hb-expand"),
   hbClose: $<HTMLButtonElement>("#hb-close"),
@@ -78,6 +79,7 @@ let prefs: UiPrefs = {
   tiles: { wave: true, spectrum: true, system: true, radar: true, clock: true, globe: true, pipeline: true },
   cinematic_dim: 0.45,
   scanlines: true,
+  text_only: false,
 };
 
 function merge(patch: PrefPatch): UiPrefs {
@@ -103,11 +105,13 @@ function applyPrefs(p: UiPrefs, { local = false } = {}): void {
   root.setProperty("--reactor-size", `${p.reactor_size}px`);
   for (const c of CORNERS) body.classList.toggle(`corner-${c}`, p.corner === c);
   body.classList.toggle("no-widgets", !p.widgets);
-  body.classList.toggle("no-convo", !p.show_convo);
+  body.classList.toggle("no-convo", !p.show_convo && !p.text_only); // text-only: the text *is* the reply, always shown
   body.classList.toggle("no-status", !p.show_status);
   body.classList.toggle("no-scanlines", !p.scanlines);
+  body.classList.toggle("text-only", p.text_only);
+  el.hbMute.title = p.text_only ? "Text-only mode is on — click to let him speak again" : "Text-only mode: show replies, don't speak them";
   layoutTiles();
-  if (!local) bridge.applyPrefs({ corner: p.corner, auto_hide: p.auto_hide }); // the window docks / auto-hides accordingly
+  if (!local) bridge.applyPrefs({ corner: p.corner, auto_hide: p.auto_hide, text_only: p.text_only }); // window: docking, auto-hide, tray tick
   // already resting in the corner: apply the auto-hide choice now rather than after the next turn
   if (mode === "compact" && state === "idle" && body.classList.contains("resting")) bridge.setVisible(!p.auto_hide);
   settings.refresh();
@@ -312,13 +316,17 @@ function shutdown(): void {
   if (!bridge.quit()) void fetch("/shutdown", { method: "POST" }).catch(() => undefined);
 }
 
+/** Change preferences: apply locally at once, then send the patch — the hub validates + persists it (data/ui.json) and
+ *  broadcasts the full set back to every HUD. Used by the drawer, the header buttons, the tray (window.setPrefs) … */
+function changePrefs(patch: PrefPatch): void {
+  applyPrefs(merge(patch));
+  sock.send({ type: "ui.prefs", prefs: patch });
+}
+
 const settings = initSettings($("#settings"), {
   prefs: () => prefs,
   preview: (patch) => applyPrefs(merge(patch), { local: true }),
-  change: (patch) => {
-    applyPrefs(merge(patch));
-    sock.send({ type: "ui.prefs", prefs: patch }); // the hub validates + persists, then broadcasts the full set back
-  },
+  change: changePrefs,
   action: (a: Action) => {
     settings.close();
     if (a === "hide") bridge.hide();
@@ -327,6 +335,7 @@ const settings = initSettings($("#settings"), {
   },
   hotkeys: () => hotkeys,
 });
+el.hbMute.onclick = () => changePrefs({ text_only: !prefs.text_only });
 el.hbSettings.onclick = () => settings.toggle();
 el.hbExpand.onclick = () => requestMode(mode === "cinematic" ? "panel" : "cinematic");
 el.hbClose.onclick = () => requestMode("compact");
@@ -373,6 +382,7 @@ Object.assign(window as unknown as Record<string, unknown>, {
   setMode,
   switchMode: (to: Mode) => animateTo(to),
   openSettings: () => settings.open(),
+  setPrefs: (patch: PrefPatch) => changePrefs(patch), // tray → "Text only" etc.
 });
 
 // ---- image drop / paste -----------------------------------------------------------------------

@@ -12,8 +12,15 @@
       <!-- identity + status -->
       <header id="head">
         <div class="brand">J.A.R.V.I.S.</div>
-        <div class="status"><span id="state-dot"></span><span id="state-text">BOOTING</span></div>
+        <div class="status"><span id="state-dot"></span><span id="state-text">BOOTING</span><span id="text-badge" title="Text-only mode — replies on screen, nothing spoken"></span></div>
         <div class="hbtns">
+          <button id="hb-mute" class="hbtn" type="button" title="Text-only mode: show replies, don't speak them">
+            <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+              <path d="M4 9v6h4l5 4V5L8 9H4z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
+              <path class="waves" d="M16 9.5a3.5 3.5 0 0 1 0 5M18.5 7a7 7 0 0 1 0 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+              <path class="slash" d="M3 3l18 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+            </svg>
+          </button>
           <button id="hb-settings" class="hbtn" type="button" title="Settings">⚙</button>
           <button id="hb-expand" class="hbtn" type="button" title="Full interface  (Ctrl+Shift+M)">⤢</button>
           <button id="hb-close" class="hbtn" type="button" title="Back to the corner  (Esc)">✕</button>
