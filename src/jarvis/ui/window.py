@@ -5,9 +5,11 @@ with no chrome, see-through background, a tray icon and global hotkeys. QtWebEng
 same Vite build the backend serves at http://127.0.0.1:8765, so the HUD code has one implementation.
 
 Modes (settings.yaml → ui.mode, switchable from the tray menu or Ctrl+Shift+M):
-  compact   small reactor in the bottom-right corner, click-through while idle (so it never steals clicks)
-  panel     reactor + transcript + input, bottom-right
-  cinematic full-screen overlay
+  compact   reactor in the bottom-right corner, always click-through (it never steals a click or focus). Dimmed while
+            idle; on "Hey Jarvis" it brightens and the last lines of the conversation unfold beside it, then it folds
+            and dims again `ui.linger_s` after the turn. This is the "lives on your desktop" mode.
+  panel     reactor + instruments + transcript + input, bottom-right, draggable — for reading and typing
+  cinematic full-screen overlay that dims the desktop (`ui.cinematic_dim`) — the movie takeover, on demand only
 
 Hotkeys (global, via pynput):
   ui.hotkey_text_input  (default Ctrl+Shift+J)  show the HUD and focus the text box
@@ -39,7 +41,9 @@ from jarvis.config import Settings
 
 Mode = Literal["compact", "panel", "cinematic"]
 MODES: tuple[Mode, ...] = ("compact", "panel", "cinematic")
-SIZES: dict[Mode, tuple[int, int]] = {"compact": (340, 340), "panel": (520, 760)}
+# compact: the reactor itself is ~300 px in the bottom-right corner of this (transparent, click-through) window; the
+# rest of the area is where the last lines of conversation unfold while Jarvis is engaged (see hud/src/main.ts).
+SIZES: dict[Mode, tuple[int, int]] = {"compact": (720, 560), "panel": (560, 860)}
 MARGIN = 24
 
 # Win32 extended window styles for click-through

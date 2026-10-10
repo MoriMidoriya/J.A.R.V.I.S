@@ -59,12 +59,18 @@ audio:
 
 ui:
   enabled: true
-  mode: compact                  # compact | panel | cinematic
+  mode: compact                  # compact (click-through reactor in the corner) | panel (console) | cinematic (full screen)
   host: 127.0.0.1
   port: 8765
   hotkey_text_input: <ctrl>+<shift>+j
   hotkey_toggle_hud: <ctrl>+<shift>+h
   start_with_windows: false
+  # Compact-mode attention behaviour: the reactor rests dimmed; "Hey Jarvis" brings it to full brightness and unfolds the
+  # last lines of conversation beside it; linger_s after the turn it folds and dims again.
+  idle_opacity: 0.55             # 0.1-1.0 brightness of the resting reactor
+  linger_s: 8                    # seconds the conversation stays unfolded after Jarvis goes idle (0 = fold at once)
+  widgets: true                  # side instruments (audio, spectrum, system, clock, globe, pipeline) in panel/cinematic
+  cinematic_dim: 0.45            # 0-0.9 how much cinematic mode darkens the desktop behind it
 
 tools:
   everything_path: C:\Program Files\Everything\Everything.exe

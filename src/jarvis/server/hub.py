@@ -2,9 +2,9 @@
 
 Protocol (JSON objects, one per message)
   server → client : every `jarvis.events.Event` as `event.to_json()` (type = "state", "wake", "transcript.final",
-                    "assistant.token", "assistant.final", "audio.level", "mic.level", "tool.call", "tool.result",
-                    "confirm.request", "confirm.resolved", "notice", "reminder.due", "metrics"),
-                    plus `{"type": "hello", ...}` once on connect with the current state and settings.
+                    "assistant.token", "assistant.final", "audio.level", "mic.level", "spectrum", "system.stats",
+                    "tool.call", "tool.result", "confirm.request", "confirm.resolved", "notice", "reminder.due", "metrics"),
+                    plus `{"type": "hello", ...}` once on connect with the current state, UI preferences and history.
   client → server : {"type": "text", "text": "..."}                       typed command
                     {"type": "image", "text": "...", "image_b64": "...", "mime": "image/png"}
                     {"type": "confirm", "id": "...", "accepted": true}    confirm button
@@ -26,7 +26,7 @@ from loguru import logger
 from jarvis.config import Settings
 from jarvis.events import Event, EventBus
 
-HIGH_RATE = {"audio.level", "mic.level"}  # droppable when a client lags; everything else is delivered in order
+HIGH_RATE = {"audio.level", "mic.level", "spectrum", "system.stats"}  # droppable when a client lags; everything else is delivered in order
 HISTORY_TYPES = {"transcript.final", "assistant.final", "tool.call", "tool.result", "notice", "reminder.due"}
 QUEUE_MAX = 256
 
@@ -78,6 +78,12 @@ class Hub:
             "model": self.s.llm.primary,
             "user_title": self.s.assistant.user_title,
             "mode": self.s.ui.mode,
+            "ui": {
+                "idle_opacity": self.s.ui.idle_opacity,
+                "linger_s": self.s.ui.linger_s,
+                "widgets": self.s.ui.widgets,
+                "cinematic_dim": self.s.ui.cinematic_dim,
+            },
             "history": list(self.history),
             "pending_confirm": self.pending_confirm,
         }

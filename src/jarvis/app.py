@@ -11,6 +11,7 @@ Boot order matters for perceived latency:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sys
 import time
 
@@ -20,7 +21,7 @@ from jarvis.audio.input import MicInput
 from jarvis.audio.vad import SileroVAD
 from jarvis.audio.wakeword import WakeWord
 from jarvis.config import Settings, get_settings
-from jarvis.events import EventBus, Notice, State, StateChanged
+from jarvis.events import EventBus, Notice, State, StateChanged, SystemStats
 from jarvis.llm import ollama
 from jarvis.llm.agent import Agent
 from jarvis.llm.context import day_part
@@ -96,6 +97,7 @@ class JarvisApp:
         registry.confirm_handler = self.pipeline.confirm
         self.hub.pipeline = self.pipeline
         self.reminders.start()  # after the pipeline exists so due reminders have someone to announce them
+        self._spawn(self._system_stats(), "system-stats")
 
         logger.info("audio stack ready in {:.1f}s", time.perf_counter() - t0)
         await self.bus.emit(Notice(text="J.A.R.V.I.S. online"))
@@ -155,6 +157,53 @@ class JarvisApp:
                 t.cancel()
 
         self.loop.call_soon_threadsafe(_cancel_all)
+
+    async def _system_stats(self) -> None:
+        """Every 2 s while a HUD is connected: CPU / RAM / VRAM / network rate / battery for the side widgets.
+
+        VRAM comes from `torch.cuda.mem_get_info()` (device-wide, no nvidia-smi subprocess); CPU% is psutil's
+        non-blocking reading since the previous call."""
+        import psutil
+
+        psutil.cpu_percent(interval=None)  # prime the counter
+        last_net = psutil.net_io_counters()
+        last_t = time.perf_counter()
+        while True:
+            await asyncio.sleep(2.0)
+            if not self.hub.clients:
+                last_net = psutil.net_io_counters()
+                last_t = time.perf_counter()
+                psutil.cpu_percent(interval=None)
+                continue
+            try:
+                net = psutil.net_io_counters()
+                now = time.perf_counter()
+                dt = max(now - last_t, 1e-3)
+                up = (net.bytes_sent - last_net.bytes_sent) * 8 / 1000 / dt
+                down = (net.bytes_recv - last_net.bytes_recv) * 8 / 1000 / dt
+                last_net, last_t = net, now
+                vram_used = vram_total = None
+                with contextlib.suppress(Exception):  # no CUDA / driver hiccup → the gauge just shows "—"
+                    import torch
+
+                    if torch.cuda.is_available():
+                        free, total = torch.cuda.mem_get_info()
+                        vram_used, vram_total = round((total - free) / 1e9, 2), round(total / 1e9, 2)
+                bat = psutil.sensors_battery()
+                await self.bus.emit(
+                    SystemStats(
+                        cpu_pct=psutil.cpu_percent(interval=None),
+                        mem_pct=psutil.virtual_memory().percent,
+                        vram_used_gb=vram_used,
+                        vram_total_gb=vram_total,
+                        net_up_kbps=round(up, 1),
+                        net_down_kbps=round(down, 1),
+                        battery_pct=int(bat.percent) if bat else None,
+                        plugged=bool(bat.power_plugged) if bat else None,
+                    )
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.debug("system stats failed: {}", e)
 
     async def _keepalive(self) -> None:
         """Re-arm Ollama's keep_alive timer so the model stays in VRAM while Jarvis runs (cheap no-op request)."""

@@ -6,31 +6,42 @@
     <title>J.A.R.V.I.S.</title>
     <link rel="stylesheet" href="./src/style.css" />
   </head>
-  <body>
-    <canvas id="scene"></canvas>
+  <body class="pre-boot">
+    <div id="vignette"></div>
     <div id="hud">
-      <!-- top-left: identity + status -->
+      <!-- identity + status -->
       <header id="head">
         <div class="brand">J.A.R.V.I.S.</div>
         <div class="status"><span id="state-dot"></span><span id="state-text">BOOTING</span></div>
       </header>
 
-      <!-- scrolling transcript (user + assistant) -->
-      <section id="transcript"></section>
+      <!-- the reactor (Three.js) -->
+      <div id="reactor"><canvas id="scene"></canvas></div>
 
-      <!-- tool call chips -->
-      <section id="tools"></section>
+      <!-- instruments (canvas 2D, see widgets.ts); which ones show depends on the mode -->
+      <section class="tile" id="t-wave"><span class="lbl">AUDIO I/O</span><canvas data-inst="wave"></canvas></section>
+      <section class="tile" id="t-radar"><span class="lbl">TELEMETRY</span><canvas data-inst="radar"></canvas></section>
+      <section class="tile" id="t-clock"><span class="lbl">CHRONO</span><canvas data-inst="clock"></canvas></section>
+      <section class="tile" id="t-system"><span class="lbl">SYSTEM</span><canvas data-inst="system"></canvas></section>
+      <section class="tile" id="t-spectrum"><span class="lbl">SPECTRUM</span><canvas data-inst="spectrum"></canvas></section>
+      <section class="tile" id="t-globe"><span class="lbl">UPLINK</span><canvas data-inst="globe"></canvas></section>
+      <section class="tile bare" id="t-pipeline"><span class="lbl">PIPELINE</span><canvas data-inst="pipeline"></canvas></section>
 
-      <!-- confirmation card -->
-      <section id="confirm" class="hidden">
-        <div id="confirm-text"></div>
-        <div class="row">
-          <button id="confirm-yes" class="btn yes">Confirm</button>
-          <button id="confirm-no" class="btn no">Cancel</button>
+      <!-- conversation: transcript + tool chips + confirmation card -->
+      <section id="convo">
+        <div id="transcript"></div>
+        <div id="tools"></div>
+        <div id="confirm" class="hidden">
+          <div id="confirm-text"></div>
+          <div class="row">
+            <button id="confirm-yes" class="btn yes">Confirm</button>
+            <button id="confirm-no" class="btn no">Cancel</button>
+          </div>
+          <div class="voice-hint">say “yes” or “no”</div>
         </div>
       </section>
 
-      <!-- bottom: input + metrics -->
+      <!-- input + metrics -->
       <footer id="foot">
         <form id="input-form" autocomplete="off">
           <input id="input" type="text" placeholder="Type a command, sir — or drop an image" spellcheck="false" />

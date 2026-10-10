@@ -22,7 +22,7 @@ Voice-first, local-first AI assistant for Windows with full PC control and an Ir
 | Weather & web | Open-Meteo weather (no key), reads web pages aloud/summarises |
 | Safety | risky actions ask for spoken confirmation; PowerShell only behind confirmation + audit log; file access limited to allow-listed folders |
 | Follow-ups | after a reply you have 8 s to speak again without the wake word |
-| HUD | transparent always-on-top arc reactor that pulses with his voice (cyan idle, amber listening, racing rings while thinking); transcript, tool chips, confirm buttons, metrics; tray icon; three layout modes |
+| HUD | transparent always-on-top arc reactor: concentric instrument rings whose bars lengthen with the spectrum of his voice (cyan idle/speaking, amber listening, racing rings while thinking); conversation unfolds beside it while he's engaged, then folds away; side instruments (audio, spectrum, system, clock, globe, latencies) in the bigger modes; tray icon; three layout modes |
 | Type or drop images | `Ctrl+Shift+J` opens the text box — typed commands behave exactly like spoken ones; drag-drop / paste an image and ask about it |
 | Picks up where you left off | conversations are saved; after a restart (within 6 h) he still knows what you were talking about |
 | Starts with Windows | `uv run jarvis autostart on` — launches silently at sign-in, lives in the tray |
@@ -90,19 +90,23 @@ takes your assistant down. Conversations are saved to `data/jarvis.db`; if you r
 
 ### The HUD
 
+Just say "Hey Jarvis" — nothing covers your screen unless you ask for it.
+
 | | |
 |---|---|
-| **Compact** (default) | small reactor bottom-right, click-through — it never gets in the way |
-| **Panel** | reactor + transcript + tool chips + text box; drag it anywhere |
-| **Cinematic** | full-screen overlay for show |
-| `Ctrl+Shift+J` | show the HUD and focus the text box (typed commands are spoken back, like voice) |
+| **Compact** (default) | the reactor rests dimmed in the bottom-right corner, click-through — your mouse, keyboard and focus stay with whatever you're doing. On "Hey Jarvis" it brightens, goes amber while listening, and the last lines of the conversation unfold beside it while he answers; ~8 s after the turn (`ui.linger_s`) it folds and dims again |
+| **Panel** | a framed console: reactor, audio/spectrum/system instruments, scrolling transcript, text box; drag it anywhere |
+| **Cinematic** | full-screen takeover with the desktop dimmed (`ui.cinematic_dim`) and six instruments around a big reactor — only when you switch to it |
+| `Ctrl+Shift+J` | show the HUD and focus the text box (switches compact → panel; typed commands are spoken back, like voice) |
 | `Ctrl+Shift+H` / `Ctrl+Shift+M` | hide/show · cycle mode (also in the tray menu) |
-| Click the reactor | same as saying "Hey Jarvis" |
+| Click the reactor | same as saying "Hey Jarvis" (panel / cinematic — compact is click-through) |
 | Drop / paste an image | thumbnail appears → ask a question → the vision model answers aloud |
 | `Esc` | cancel a pending confirmation, or interrupt him |
 
-Colours tell you the state: cyan standby/speaking (the sphere ripples with his voice), amber listening (mic waveform
-ring), racing rings while thinking, amber card with **Confirm / Cancel** when a risky action needs your OK.
+The reactor tells you the state: cyan standby/speaking — the 96 bars around the core lengthen with the spectrum of his
+voice (lows at the bottom) while the light itself only pulses gently; amber listening — the same bars follow your
+voice; white-blue thinking — pulses chase around the ring; red if the link drops. A risky action brings an amber card:
+**Confirm / Cancel** in panel/cinematic, "say yes or no" in compact.
 
 ## Talk to him
 

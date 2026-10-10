@@ -9,7 +9,7 @@ import time
 from loguru import logger
 
 from jarvis.audio.output import AudioPlayer
-from jarvis.events import AudioLevel, EventBus
+from jarvis.events import AudioLevel, EventBus, Spectrum
 from jarvis.llm.chunker import SentenceChunker
 from jarvis.tts.base import TTSEngine
 
@@ -19,7 +19,7 @@ class Speaker:
         self.tts = tts
         self.bus = bus
         self.loop = loop
-        self.player = AudioPlayer(sample_rate=tts.sample_rate, device=output_device, on_level=self._on_level)
+        self.player = AudioPlayer(sample_rate=tts.sample_rate, device=output_device, on_level=self._on_level, on_spectrum=self._on_spectrum)
         # Single worker so synthesis stays ordered and the model isn't hit concurrently.
         self._pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="tts")
         self._gen = 0
@@ -34,6 +34,9 @@ class Speaker:
             return
         self._last_level = lvl
         self.bus.emit_threadsafe(self.loop, AudioLevel(level=lvl))
+
+    def _on_spectrum(self, bands) -> None:
+        self.bus.emit_threadsafe(self.loop, Spectrum(source="out", bands=[round(float(b), 2) for b in bands]))
 
     # ---- speaking ------------------------------------------------------------------------------
     @property

@@ -1,7 +1,9 @@
-/** HUD entry point: wires the WebSocket events to the Three.js scene and the DOM panels. */
+/** HUD entry point: wires the WebSocket events to the Three.js scene, the canvas instruments and the DOM panels,
+ *  and runs the "attention" behaviour of the compact overlay (dim while idle → unfold on "Hey Jarvis" → settle). */
 
 import { ReactorScene } from "./scene";
-import { JarvisSocket, type JarvisState, type ServerEvent } from "./ws";
+import { Instruments } from "./widgets";
+import { JarvisSocket, type JarvisState, type ServerEvent, type UiPrefs } from "./ws";
 
 const $ = <T extends HTMLElement>(sel: string): T => document.querySelector(sel) as T;
 
@@ -12,6 +14,7 @@ const urlMode = params.get("mode");
 if (params.get("bg") === "1") document.body.classList.add("bg");
 
 const scene = new ReactorScene($("#scene"));
+const inst = new Instruments();
 const sock = new JarvisSocket();
 
 const el = {
@@ -31,23 +34,56 @@ const el = {
   imageClear: $<HTMLButtonElement>("#image-clear"),
   boot: $("#boot"),
   bootLines: $(".boot-lines"),
-  hud: $("#hud"),
 };
+const body = document.body;
 
 let userTitle = "sir";
 let model = "";
+let state: JarvisState = "booting";
 let confirmId: string | null = null;
 let streaming: HTMLDivElement | null = null; // the assistant bubble currently receiving tokens
 let streamNode: Text | null = null; // its text node (kept separate from the blinking cursor span)
 let streamText = "";
 let pendingImage: { b64: string; mime: string } | null = null;
 const toolChips = new Map<string, HTMLSpanElement>();
+let prefs: UiPrefs = { idle_opacity: 0.55, linger_s: 8, widgets: true, cinematic_dim: 0.45 };
 
 function setMode(mode: string): void {
-  document.body.classList.remove("compact", "panel", "cinematic");
-  document.body.classList.add(mode);
+  body.classList.remove("compact", "panel", "cinematic");
+  body.classList.add(mode);
 }
 setMode(urlMode ?? "panel");
+
+function applyPrefs(p: UiPrefs): void {
+  prefs = p;
+  document.documentElement.style.setProperty("--idle-opacity", String(p.idle_opacity));
+  document.documentElement.style.setProperty("--cinematic-dim", String(p.cinematic_dim));
+  body.classList.toggle("no-widgets", !p.widgets);
+}
+
+// ---- attention (compact mode) -----------------------------------------------------------------
+// engaged: full brightness, last lines of the conversation shown beside the reactor.
+// resting: dimmed to --idle-opacity, conversation folded away. Any activity engages; `linger_s` after the turn ends
+// (state back to idle) the HUD settles back to resting. Panel/cinematic ignore the classes (see style.css).
+let lingerTimer: number | undefined;
+function engage(): void {
+  window.clearTimeout(lingerTimer);
+  lingerTimer = undefined;
+  body.classList.add("engaged");
+  body.classList.remove("resting");
+}
+function settle(): void {
+  window.clearTimeout(lingerTimer);
+  lingerTimer = window.setTimeout(() => {
+    body.classList.remove("engaged");
+    body.classList.add("resting");
+  }, Math.max(0, prefs.linger_s) * 1000);
+}
+/** Something happened (reminder, notice, tool...): show it, and if nothing else is going on, settle again later. */
+function touch(): void {
+  engage();
+  if (state === "idle") settle();
+}
 
 // ---- state ------------------------------------------------------------------------------------
 const STATE_LABEL: Record<JarvisState, string> = {
@@ -59,26 +95,43 @@ const STATE_LABEL: Record<JarvisState, string> = {
   confirming: "AWAITING CONFIRMATION",
   error: "ERROR",
 };
-const STATE_CSS: Record<JarvisState, string> = {
-  booting: "var(--cyan)",
-  idle: "var(--cyan)",
-  listening: "var(--amber)",
-  thinking: "var(--white)",
-  speaking: "var(--cyan)",
-  confirming: "var(--amber)",
-  error: "var(--red)",
+const STATE_HEX: Record<JarvisState, string> = {
+  booting: "#34e4f5",
+  idle: "#34e4f5",
+  listening: "#ffb648",
+  thinking: "#c6ecff",
+  speaking: "#34e4f5",
+  confirming: "#ffb648",
+  error: "#ff5a5a",
 };
 
+function setAccent(hex: string): void {
+  const n = parseInt(hex.slice(1), 16);
+  document.documentElement.style.setProperty("--accent", hex);
+  document.documentElement.style.setProperty("--accent-rgb", `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`);
+  inst.setAccent(hex);
+}
+
 function setState(s: JarvisState): void {
+  state = s;
   scene.setState(s);
+  inst.setState(s);
   el.stateText.textContent = STATE_LABEL[s] ?? s.toUpperCase();
-  document.documentElement.style.setProperty("--accent", STATE_CSS[s] ?? "var(--cyan)");
-  document.body.dataset.state = s;
-  if (s !== "speaking" && s !== "thinking") scene.setSpeechLevel(0);
-  if (s !== "listening" && s !== "confirming") scene.setMicLevel(0);
+  setAccent(STATE_HEX[s] ?? STATE_HEX.idle);
+  body.dataset.state = s;
+  if (s !== "speaking" && s !== "thinking") {
+    scene.setSpeechLevel(0);
+    inst.pushLevel("out", 0);
+  }
+  if (s !== "listening" && s !== "confirming") {
+    scene.setMicLevel(0);
+    inst.pushLevel("mic", 0);
+  }
   // The pipeline speaks the question (SPEAKING) before entering CONFIRMING, so only drop the card once the turn is over.
   if (s === "idle" || s === "listening") hideConfirm();
   if (s === "idle" && el.boot && !el.boot.classList.contains("done")) finishBoot();
+  if (s === "idle") settle();
+  else if (s !== "booting") engage();
 }
 
 // ---- transcript -------------------------------------------------------------------------------
@@ -251,7 +304,7 @@ function startBoot(): void {
     d.style.animationDelay = `${i * 0.35}s`;
     el.bootLines.appendChild(d);
   });
-  el.hud.style.opacity = "0";
+  body.classList.add("pre-boot");
 }
 function finishBoot(): void {
   if (bootDone) return;
@@ -262,7 +315,7 @@ function finishBoot(): void {
   el.bootLines.appendChild(d);
   setTimeout(() => {
     el.boot.classList.add("done");
-    el.hud.style.opacity = "1";
+    body.classList.remove("pre-boot");
   }, 900);
 }
 startBoot();
@@ -275,6 +328,7 @@ function onMetrics(m: Extract<ServerEvent, { type: "metrics" }>): void {
   if (m.tts_first_audio_ms != null) parts.push(`TTS ${m.tts_first_audio_ms}ms`);
   if (m.total_ms != null) parts.push(`TOTAL ${m.total_ms}ms`);
   el.metrics.textContent = parts.join("  ·  ");
+  inst.setLatency({ stt_ms: m.stt_ms ?? null, llm_first_token_ms: m.llm_first_token_ms ?? null, tts_first_audio_ms: m.tts_first_audio_ms ?? null, total_ms: m.total_ms ?? null });
 }
 
 // ---- event routing ----------------------------------------------------------------------------
@@ -285,6 +339,7 @@ function handle(ev: ServerEvent): void {
       model = ev.model;
       el.metrics.textContent = model.replace(/^ollama\//, "");
       if (!urlMode && ev.mode) setMode(ev.mode);
+      if (ev.ui) applyPrefs(ev.ui);
       el.transcript.innerHTML = ""; // history replay replaces whatever a previous connection showed
       el.tools.innerHTML = "";
       streaming = null;
@@ -298,39 +353,55 @@ function handle(ev: ServerEvent): void {
       break;
     case "wake":
       scene.pulse();
+      engage();
       break;
     case "transcript.final":
       addMsg("user", ev.text);
+      touch();
       break;
     case "assistant.token":
       onToken(ev.text);
       break;
     case "assistant.final":
       onFinal(ev.text);
+      touch();
       break;
     case "audio.level":
       scene.setSpeechLevel(ev.level);
+      inst.pushLevel("out", ev.level);
       break;
     case "mic.level":
       scene.setMicLevel(ev.level);
+      inst.pushLevel("mic", ev.level);
+      break;
+    case "spectrum":
+      scene.setSpectrum(ev.source, ev.bands);
+      inst.setSpectrum(ev.source, ev.bands);
+      break;
+    case "system.stats":
+      inst.setStats(ev);
       break;
     case "tool.call":
       onToolCall(ev.id, ev.name, ev.args);
+      touch();
       break;
     case "tool.result":
       onToolResult(ev.id, ev.name, ev.ok);
       break;
     case "confirm.request":
       showConfirm(ev.id, ev.prompt);
+      engage();
       break;
     case "confirm.resolved":
       hideConfirm();
       break;
     case "notice":
       addMsg("notice", ev.text.toUpperCase());
+      touch();
       break;
     case "reminder.due":
-      addMsg("reminder", `⏰ ${ev.kind === "timer" ? "Timer" : "Reminder"}: ${ev.text}`);
+      addMsg("reminder", `${ev.kind === "timer" ? "Timer" : "Reminder"}: ${ev.text}`);
+      touch();
       break;
     case "metrics":
       onMetrics(ev);
@@ -344,6 +415,7 @@ sock.onConnection = (up) => {
     el.stateText.textContent = "LINK LOST — RECONNECTING";
     el.stateDot.style.background = "var(--red)";
     scene.setState("error");
+    engage();
   } else {
     el.stateDot.style.background = "";
   }

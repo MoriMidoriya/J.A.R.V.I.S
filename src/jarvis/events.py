@@ -75,6 +75,29 @@ class MicLevel(Event):
     level: float
 
 
+class Spectrum(Event):
+    """24 log-spaced bands (80 Hz–8 kHz) in 0..1 — `out` = Jarvis' voice at 25 Hz, `mic` = the room while listening
+    at ~12 Hz. Drives the HUD's bar ring (bars lengthen per band instead of the whole reactor flashing)."""
+
+    type: Literal["spectrum"] = "spectrum"
+    source: Literal["out", "mic"]
+    bands: list[float]
+
+
+class SystemStats(Event):
+    """Every 2 s: what the side widgets show (CPU, RAM, VRAM, network rate, battery)."""
+
+    type: Literal["system.stats"] = "system.stats"
+    cpu_pct: float
+    mem_pct: float
+    vram_used_gb: float | None = None
+    vram_total_gb: float | None = None
+    net_up_kbps: float = 0.0
+    net_down_kbps: float = 0.0
+    battery_pct: int | None = None
+    plugged: bool | None = None
+
+
 class ToolCall(Event):
     type: Literal["tool.call"] = "tool.call"
     id: str

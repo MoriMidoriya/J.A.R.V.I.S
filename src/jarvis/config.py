@@ -103,6 +103,12 @@ class UICfg(BaseModel):
     hotkey_text_input: str = "<ctrl>+<shift>+j"
     hotkey_toggle_hud: str = "<ctrl>+<shift>+h"
     start_with_windows: bool = False
+    # Attention behaviour (compact mode): the reactor sits dimmed in the corner; "Hey Jarvis" brings it to full
+    # brightness and unfolds the last lines of conversation next to it; `linger_s` after the turn it folds and dims again.
+    idle_opacity: float = Field(0.55, ge=0.1, le=1.0)
+    linger_s: float = Field(8.0, ge=0.0, le=120.0)
+    widgets: bool = True  # side instruments (audio in/out, spectrum, system, clock) in panel/cinematic modes
+    cinematic_dim: float = Field(0.45, ge=0.0, le=0.9)  # how much the full-screen mode darkens the desktop behind it
 
 
 class ToolsCfg(BaseModel):

@@ -25,6 +25,7 @@ import numpy as np
 from loguru import logger
 
 from jarvis.audio.input import MicInput, rms_level
+from jarvis.audio.spectrum import BandAnalyzer
 from jarvis.audio.vad import SileroVAD, Utterance
 from jarvis.audio.wakeword import WakeWord
 from jarvis.config import Settings
@@ -34,6 +35,7 @@ from jarvis.events import (
     Metrics,
     MicLevel,
     Notice,
+    Spectrum,
     State,
     StateChanged,
     TranscriptFinal,
@@ -83,6 +85,8 @@ class VoicePipeline:
         self._frame_i = 0
         self._wake_threshold = wake.threshold
         self._wake_threshold_speaking = min(0.9, wake.threshold + 0.2)
+        # HUD bar ring while listening: 24 bands per 80 ms mic frame (+6 dB: a room mic is quieter than Kokoro at full scale)
+        self._mic_bands = BandAnalyzer(mic.sr, mic.frame, fmax=min(6000.0, mic.sr / 2 - 1), gain_db=6.0)
         self.last_stt_ms: int | None = None
         self._announce_queue: list[str] = []  # reminders that came due while we were busy
         self.bus.on("reminder.due", self._on_reminder_due)
@@ -110,8 +114,9 @@ class VoicePipeline:
     async def _on_frame(self, frame: np.ndarray) -> None:
         st = self.state
         if st in (State.LISTENING, State.CONFIRMING):
-            if self._frame_i % 2 == 0:
-                await self.bus.emit(MicLevel(level=rms_level(frame)))
+            await self.bus.emit(MicLevel(level=rms_level(frame)))  # 12.5 Hz; the HUD smooths it
+            bands = self._mic_bands.bands(frame.astype(np.float32) / 32768.0)  # ~30 µs
+            await self.bus.emit(Spectrum(source="mic", bands=[round(float(b), 2) for b in bands]))
             utt = self.vad.feed(frame)
             if utt is not None:
                 await self._on_utterance(utt)

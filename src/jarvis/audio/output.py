@@ -1,8 +1,9 @@
-"""Speaker playback with a cancelable queue and an RMS level meter (drives the HUD pulse)."""
+"""Speaker playback with a cancelable queue, an RMS level meter and a 24-band spectrum (both drive the HUD)."""
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import queue
 import threading
 import time
@@ -12,7 +13,11 @@ import numpy as np
 import sounddevice as sd
 from loguru import logger
 
+from jarvis.audio.spectrum import BandAnalyzer
+
 LevelCB = Callable[[float], None]
+SpectrumCB = Callable[[np.ndarray], None]
+SPECTRUM_FRAME = 1024  # ~43 ms at 24 kHz → 23 Hz bins; analysed every 2nd 20 ms block (25 Hz)
 
 
 class AudioPlayer:
@@ -21,10 +26,20 @@ class AudioPlayer:
     `cancel()` drops everything queued and fades the current buffer out within ~20 ms (barge-in).
     """
 
-    def __init__(self, sample_rate: int = 24000, device: int | str | None = None, on_level: LevelCB | None = None, level_hz: int = 40) -> None:
+    def __init__(
+        self,
+        sample_rate: int = 24000,
+        device: int | str | None = None,
+        on_level: LevelCB | None = None,
+        level_hz: int = 40,
+        on_spectrum: SpectrumCB | None = None,
+    ) -> None:
         self.sr = sample_rate
         self.device = device
         self.on_level = on_level
+        self.on_spectrum = on_spectrum
+        self._analyzer = BandAnalyzer(sample_rate, SPECTRUM_FRAME) if on_spectrum else None
+        self._ring = np.zeros(SPECTRUM_FRAME, dtype=np.float32)  # last ~43 ms of what was written to the device
         self._level_interval = 1.0 / level_hz
         self._q: queue.Queue[np.ndarray | None] = queue.Queue()
         self._cancel = threading.Event()
@@ -79,6 +94,7 @@ class AudioPlayer:
         except Exception as e:  # noqa: BLE001
             logger.error("audio output unavailable: {}", e)
             return
+        n_block = 0
         while True:
             try:
                 item = self._q.get(timeout=0.05)
@@ -86,6 +102,7 @@ class AudioPlayer:
                 if self._playing.is_set():
                     self._playing.clear()
                     self._emit_level(0.0)
+                    self._emit_spectrum(silence=True)
                 self._idle.set()
                 self._cancel.clear()
                 continue
@@ -106,10 +123,16 @@ class AudioPlayer:
                     if now - last_level >= self._level_interval:
                         last_level = now
                         self._emit_level(float(np.sqrt(np.mean(chunk**2))))
+                    if self._analyzer is not None:
+                        self._ring = np.concatenate((self._ring[block:], chunk))
+                        n_block += 1
+                        if n_block % 2 == 0:
+                            self._emit_spectrum()
                 if self._cancel.is_set():
                     # tiny fade to avoid a click
                     stream.write(np.zeros(block, dtype=np.float32))
                     self._emit_level(0.0)
+                    self._emit_spectrum(silence=True)
             except Exception as e:  # noqa: BLE001  (stream closed during interpreter shutdown, device unplugged…)
                 logger.warning("audio output stopped: {}", e)
                 self._playing.clear()
@@ -124,3 +147,11 @@ class AudioPlayer:
                 self.on_level(lvl)
             except Exception:  # noqa: BLE001
                 pass
+
+    def _emit_spectrum(self, silence: bool = False) -> None:
+        if self.on_spectrum is None or self._analyzer is None:
+            return
+        if silence:
+            self._ring[:] = 0.0
+        with contextlib.suppress(Exception):  # a HUD-side failure must never stop playback
+            self.on_spectrum(np.zeros(self._analyzer.n_bands, np.float32) if silence else self._analyzer.bands(self._ring))

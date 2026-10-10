@@ -3,8 +3,22 @@
 export type JarvisState = "booting" | "idle" | "listening" | "thinking" | "speaking" | "confirming" | "error";
 
 // Mirrors src/jarvis/events.py (pydantic models serialised with model_dump).
+export type UiPrefs = { idle_opacity: number; linger_s: number; widgets: boolean; cinematic_dim: number };
+
+export type SystemStats = {
+  type: "system.stats";
+  cpu_pct: number;
+  mem_pct: number;
+  vram_used_gb: number | null;
+  vram_total_gb: number | null;
+  net_up_kbps: number;
+  net_down_kbps: number;
+  battery_pct: number | null;
+  plugged: boolean | null;
+};
+
 export type ServerEvent =
-  | { type: "hello"; state: JarvisState; model: string; user_title: string; mode: string; history: ServerEvent[]; pending_confirm: { id: string; prompt: string } | null }
+  | { type: "hello"; state: JarvisState; model: string; user_title: string; mode: string; ui?: UiPrefs; history: ServerEvent[]; pending_confirm: { id: string; prompt: string } | null }
   | { type: "state"; state: JarvisState }
   | { type: "wake"; score: number }
   | { type: "transcript.partial"; text: string }
@@ -13,6 +27,8 @@ export type ServerEvent =
   | { type: "assistant.final"; text: string }
   | { type: "audio.level"; level: number }
   | { type: "mic.level"; level: number }
+  | { type: "spectrum"; source: "out" | "mic"; bands: number[] }
+  | SystemStats
   | { type: "tool.call"; id: string; name: string; args: Record<string, unknown> }
   | { type: "tool.result"; id: string; name: string; ok: boolean; summary: string }
   | { type: "confirm.request"; id: string; prompt: string }

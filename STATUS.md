@@ -19,6 +19,7 @@ source of truth for *what exists, how it works, what was measured, and why decis
 | 4 | Iron Man HUD: FastAPI/WebSocket hub + Three.js reactor + PySide6 transparent overlay, text & image input | ✅ done, verified live |
 | 5 | Conversation persistence across restarts, start-with-Windows, two-process launcher, boot-time fix | ✅ done, verified live |
 | — | Lighter-model evaluation: Liquid LFM2.5 (vs Qwen3 / Qwen2.5-VL) and Parakeet-TDT (vs Whisper turbo) | ✅ done 2026-10-10 — **kept the current models** (D20, §10) |
+| 6 | HUD overhaul: instrument-ring reactor whose bars follow the voice spectrum, side instruments, compact "attention" behaviour | ✅ done 2026-10-10, verified on the desktop (§12) |
 
 Run it today:
 
@@ -124,7 +125,7 @@ cleaned up on request, §10.6).
 |---|---|---|
 | `__main__.py` | CLI (`doctor`, `chat`, `run`, `hud`, `autostart`, `say`) | Forces UTF-8 console (Windows cp1252 crashed on `▸`). |
 | `config.py` | Typed settings (pydantic) from `config/settings.yaml` + `permissions.yaml`; env overrides `JARVIS__SECTION__KEY` | `load_persona()` fills `config/persona.md`. |
-| `events.py` | Typed events + `EventBus` (async pub/sub) | `state`, `wake`, `transcript.*`, `assistant.*`, `audio.level`, `mic.level`, `tool.*`, `confirm.*`, `metrics`. The HUD consumes these verbatim. |
+| `events.py` | Typed events + `EventBus` (async pub/sub) | `state`, `wake`, `transcript.*`, `assistant.*`, `audio.level`, `mic.level`, `spectrum`, `system.stats`, `tool.*`, `confirm.*`, `metrics`. The HUD consumes these verbatim. |
 | `logging_setup.py` | loguru console (skipped under `pythonw`) + rotating file `logs/jarvis.log` (`logs/hud.log` for the window process) | `reapply()` exists because **kokoro calls `logger.remove()` on import** and wipes all sinks. |
 | `doctor.py` | Health checks | GPU kernel smoke test (not just "is CUDA visible"); checks the HUD build exists. |
 | `app.py` | Boot wiring of the **backend process**; `main()` is also the launcher entry | Loads TTS/STT/wake/VAD in parallel threads; LLM warms in background; keep-alive; `_spawn()` logs background-task failures instead of letting them die silently; `request_stop()` for `POST /shutdown`. |
@@ -154,8 +155,10 @@ cleaned up on request, §10.6).
 | `server/hub.py` | WebSocket hub: EventBus → all HUD clients; HUD commands → pipeline | Per-client queue + writer task (ordering, back-pressure); `hello` with history + pending confirm. |
 | `server/api.py` | FastAPI app: `/ws`, `/health`, `/chat`, `/confirm`, `/interrupt`, `/shutdown`, static `hud/dist` | uvicorn runs inside the backend's asyncio loop (`loop="none"`, `log_config=None` — its default logging config crashes under `pythonw`). |
 | `ui/window.py` | PySide6 shell: frameless/transparent/on-top `QWebEngineView`, tray, hotkeys, modes; 2 s supervision tick | Compact mode is click-through via Win32 `WS_EX_TRANSPARENT`; drag to move in panel mode. |
-| `hud/src/scene.ts` | Three.js reactor: particle sphere shader, rings, ticks, core, waveform ring, bloom + alpha pass | `setState / setSpeechLevel / setMicLevel / pulse`. |
-| `hud/src/main.ts`, `ws.ts`, `style.css` | DOM panels, typed WS client with reconnect/backoff, state colours, modes | `?mode=` and `?bg=1` (opaque background for browser dev) URL options. |
+| `hud/src/scene.ts` | Three.js reactor: concentric instrument rings, 96-bar spectrum ring, bracket arcs, core shader, bloom + alpha pass | `setState / setSpeechLevel / setMicLevel / setSpectrum / pulse` (§12). |
+| `hud/src/widgets.ts` | Canvas-2D side instruments: audio I/O, spectrum, system gauges, telemetry radar, clock, globe, pipeline latencies | One 30 fps loop; hidden tiles cost nothing. |
+| `hud/src/main.ts`, `ws.ts`, `style.css` | DOM panels, typed WS client with reconnect/backoff, state colours, modes, compact attention behaviour | `?mode=` and `?bg=1` (opaque background for browser dev) URL options. |
+| `audio/spectrum.py` | `BandAnalyzer`: 24 log-spaced bands (80 Hz–8 kHz) with a speech reference curve → balanced 0..1 bars | Used for Jarvis' voice (25 Hz, `AudioPlayer`) and the mic while listening (12.5 Hz, `voice.py`). |
 
 ---
 
@@ -344,6 +347,9 @@ agent reply as JSON), `POST /confirm`, `POST /interrupt`.
 
 ### The scene (`hud/src/scene.ts`) — what pulses and how
 
+> **Superseded by Phase 6 (§12)** — the particle sphere and the "whole reactor brightens with the voice" behaviour below were
+> replaced on 2026-10-10 by instrument rings whose bars *lengthen* with the voice spectrum. Kept for the record.
+
 | Layer | Driven by | Notes |
 |---|---|---|
 | Particle sphere (6 000 points, Fibonacci-distributed) | `audio.level` (Jarvis' voice) | GLSL vertex shader displaces each point along its normal by `noise(t)·(idle breath + level)`; fast ripple term + slow drift term. At full level the sphere grows ≈0.5 and stays inside the inner ring. |
@@ -365,9 +371,9 @@ changes < 0.02). HUD gain is 1.1 so normal speech sits around 0.4 and peaks near
 
 | Mode | Size / place | Shows | Mouse |
 |---|---|---|---|
-| `compact` (default) | 340×340, bottom-right | reactor + status word | **click-through** (Win32 `WS_EX_TRANSPARENT`) — it never steals a click |
-| `panel` | 520×760, bottom-right, draggable | reactor, transcript, tool chips, confirm card, input, metrics | normal |
-| `cinematic` | full screen overlay | everything, big type, centred | normal |
+| `compact` (default) | 720×560 window (the reactor itself is 300 px), bottom-right — sizes updated in Phase 6 | reactor + status word; while engaged, the last 3 lines of conversation unfold beside it (§12) | **click-through** (Win32 `WS_EX_TRANSPARENT`) — it never steals a click |
+| `panel` | 560×860, bottom-right, draggable | reactor, three instruments, transcript, tool chips, confirm card, input, metrics | normal |
+| `cinematic` | full screen overlay, desktop dimmed | everything: six instruments around the reactor, pipeline strip, big type | normal |
 
 Hotkeys (global, pynput): `Ctrl+Shift+J` show + focus the text box (switches compact → panel), `Ctrl+Shift+H`
 show/hide, `Ctrl+Shift+M` cycle mode. In the HUD itself: `/` focuses the input, `Esc` cancels a confirmation or
@@ -705,7 +711,11 @@ the one remaining big saving, your call).
 | Verbose logs | `uv run jarvis run --debug` (file log is always DEBUG: `logs/jarvis.log`) |
 | HUD starts in panel / cinematic mode | `ui.mode: panel` (or `cinematic`); cycle live with `Ctrl+Shift+M` |
 | Different hotkeys | `ui.hotkey_text_input`, `ui.hotkey_toggle_hud` (pynput syntax, e.g. `<ctrl>+<alt>+j`) |
-| HUD too bright / too subtle | `hud/src/scene.ts`: `setSpeechLevel` gain (1.1), bloom strength (`0.4 + level*0.4`), particle `uAlpha` (0.28); then `cd hud; npm run build` + tray → Reload HUD |
+| HUD dimmer / brighter while idle (compact) | `ui.idle_opacity: 0.55` (0.1–1.0) |
+| HUD stays unfolded longer / shorter after a turn | `ui.linger_s: 8` (seconds; `0` = fold immediately) |
+| No side instruments (panel / cinematic) | `ui.widgets: false` |
+| Cinematic darkens the desktop more / less | `ui.cinematic_dim: 0.45` (0 = see-through, 0.9 = near black) |
+| Bars too jumpy / too tame | `hud/src/scene.ts`: `BAR_MAX` (0.44), `setSpeechLevel` gain (1.1), bloom `0.33 + 0.22·energy`; then `cd hud; npm run build` + tray → Reload HUD |
 | Develop the HUD with hot reload | `uv run jarvis run --no-ui` in one terminal, `cd hud; npm run dev` in another → http://localhost:5173/?bg=1 |
 | Start Jarvis at Windows sign-in | `uv run jarvis autostart on` (`--mode panel` optional); `off` removes the shortcut; `status` shows it |
 | Forget conversations faster / never resume | `memory.resume_hours: 1` (or `0` = always start fresh); `/reset` in `jarvis chat` also draws a hard line |
@@ -714,12 +724,89 @@ the one remaining big saving, your call).
 
 ---
 
-## 12. Git history
+## 12. Phase 6 — HUD overhaul (done 2026-10-10, verified on the desktop)
+
+Brief: "drastically improve the visuals; the pulsating while talking is bad — make the lines around it longer or shrink
+instead of full light-level pulsating (keep a light pulse, but subtle); use the reference HUD image for elements, don't
+copy it; and sort out how it behaves on screen." Reference elements used: concentric segmented rings, fine tick rings,
+data-dash rings, thick bracket arcs with glowing tips, a glowing core, and the satellite instruments (line graph +
+waveform, pentagon radar, radar clock, gauges, spectrum bars, wireframe globe, bottom ruler). Colours stay ours
+(cyan / amber / white-blue / red by state) rather than the image's teal-on-navy.
+
+### How it works day to day (the answer to "do I just say Hey Jarvis?")
+
+Yes. Nothing covers your screen unless you ask for it:
+
+1. **Resting.** In `compact` mode (default) the reactor sits in the bottom-right corner at 55 % brightness
+   (`ui.idle_opacity`), slowly turning, with a small `STANDBY` label. The window is transparent and **click-through**:
+   whatever you are doing underneath keeps the mouse, the keyboard and the focus. It is 720×560 px but only the
+   reactor is drawn, so the rest is invisible.
+2. **"Hey Jarvis."** The reactor flashes once, goes **amber** and comes to full brightness. The rings speed up and the
+   bars around the core follow *your* voice (microphone spectrum) while he listens.
+3. **He thinks** — white-blue, two pulses chase around the bar ring, the data ring streams fast.
+4. **He answers** — cyan; the 96 bars **lengthen with the spectrum of his voice** (low frequencies at the bottom,
+   mirrored left/right) and the bracket arcs breathe ±5 %; the light level itself only rises gently (bloom 0.33 → 0.55).
+   Meanwhile the **last three lines of the conversation unfold to the left of the reactor** (YOU / JARVIS, right-aligned
+   towards it), plus tool chips if he used tools. Text has a soft shadow so it reads over light and dark apps alike.
+5. **Done.** The hot window stays amber for follow-ups; `ui.linger_s` (8 s) after he returns to idle the text folds
+   away and the reactor dims back to resting. Reminders and notices pop the text open the same way, then settle.
+
+The other two modes are for when you *want* more on screen:
+
+| Mode | When | What you get |
+|---|---|---|
+| `panel` (`Ctrl+Shift+J` switches to it, or tray → Mode) | reading / typing | A framed 560×860 console: reactor, AUDIO I/O + SPECTRUM + SYSTEM instruments, scrolling transcript, text box, latency line. Normal window, draggable. |
+| `cinematic` (tray or `Ctrl+Shift+M`) | the show | Full-screen takeover: desktop dimmed by `ui.cinematic_dim` (0.45), six instruments around a big reactor, PIPELINE strip, big type. Explicit only — it is never entered automatically. |
+
+Confirmations: in compact mode the amber card appears beside the reactor with "say *yes* or *no*" (the window is
+click-through, so there are no buttons there); in panel/cinematic the **Confirm / Cancel** buttons are back.
+
+### What was built
+
+| Piece | Where | Notes |
+|---|---|---|
+| **Spectrum analysis** | `audio/spectrum.py` (`BandAnalyzer`), `audio/output.py`, `tts/speaker.py`, `voice.py`, `events.py` (`Spectrum`) | 1024-sample Hann FFT → 24 log-spaced bands 80 Hz–8 kHz. A plain dB window left everything above 1.5 kHz at zero (speech falls ~8 dB/octave), so each band is measured against a reference curve (−26 dB at ≤180 Hz, −8 dB/octave, floor −60) over a 36 dB window. Measured on Kokoro `bm_george`: p50 0.30, p90 0.75 — balanced bars. Jarvis' voice: every 2nd 20 ms block (25 Hz) from a rolling ring in `AudioPlayer`, zeros on stop. Mic: per 80 ms frame (12.5 Hz, ~30 µs) only while listening, `fmax` 6 kHz at 16 kHz, +6 dB. |
+| **System stats** | `app.py` `_system_stats()`, `events.py` (`SystemStats`) | Every 2 s, only while a HUD is connected: CPU, RAM, VRAM (torch `mem_get_info`), network kbps up/down (counter deltas), battery. Debug-logged on error, never fatal. |
+| **Hub** | `server/hub.py` | `spectrum` and `system.stats` join the high-rate set (dropped first under back-pressure, never queued stale); `hello` now carries `ui` prefs (`idle_opacity`, `linger_s`, `widgets`, `cinematic_dim`). |
+| **Reactor** | `hud/src/scene.ts` (rewritten) | From the centre: plasma core shader + white dot + halo → radar sweep → 36-block ring (slow flicker) → 144 fine ticks (counter-rotating) → 160-dash data ring (blinks like a data stream; 9 Hz while thinking) → 3 gap arcs → **96 instanced bars** (length = spectrum, 24 bands interpolated and mirrored; mic while listening; chasing pulses while thinking; a slow travelling wave at idle) → 90-tick ruler → 4 thick bracket arcs with HDR end caps + 4 thin counter-rotating arcs → 3 orbiting satellites. Bloom 0.33 + 0.22·energy, radius 0.5. Alpha-from-luma pass kept (D17) with a higher knee (0.075) and a **circular CSS mask on the canvas** so the bloom never shows the canvas as a square against the desktop (measured: ≤ 2/255 at the edge, was +17). |
+| **Instruments** | `hud/src/widgets.ts` (new), `index.html` | Canvas-2D tiles with corner brackets and mono labels: AUDIO I/O (rolling level traces, Jarvis cyan / you amber, + mirrored waveform), SPECTRUM (24 bars, falling peak caps), SYSTEM (CPU/MEM/VRAM arc gauges, NET, BAT), TELEMETRY (pentagon radar: CPU, MEM, VRAM, NET, AUDIO, with sweep), CHRONO (radar clock + date), UPLINK (rotating wireframe globe with orbiting dot — decoration), PIPELINE (ruler + STT/LLM/TTS/TOTAL bars of the last turn). One 30 fps loop; tiles with no size are skipped. |
+| **Layout** | `hud/src/style.css` (rewritten) | One CSS grid with named areas, rearranged per mode (compact / panel / cinematic). Compact: `convo` column left, reactor bottom-right, status below; `engaged` / `resting` body classes drive opacity and the fold. Panel: translucent framed console with corner brackets. Cinematic: 300 px instrument columns, reactor spanning three rows, vignette, scanlines. Transcript restyled as HUD text (YOU / JARVIS labels, hairline borders) instead of chat bubbles; input is an underline field. |
+| **Attention logic** | `hud/src/main.ts` | `engage()` on wake / any non-idle state / transcript / tool / reminder / notice / confirm / link loss; `settle()` starts the `linger_s` timer when the state returns to idle; `touch()` = engage and, if idle, settle. Prefs applied from `hello.ui` as CSS variables. Boot now uses a `pre-boot` body class instead of inline opacity. |
+| **Shell / config** | `ui/window.py`, `config.py`, `settings.yaml` | Compact window 340×340 → 720×560 (reactor still 300 px; the rest is the invisible conversation area), panel 520×760 → 560×860. New `UICfg` fields with bounds: `idle_opacity` 0.1–1, `linger_s` 0–120, `widgets`, `cinematic_dim` 0–0.9. |
+
+### Test results (2026-10-10 12:57–13:16, real stack: `jarvis run --no-ui` + browser tab for layout shots, then the real Qt window)
+
+| Check | Result |
+|---|---|
+| Build | `tsc --noEmit && vite build` clean (strict, no unused locals); bundle 527 kB (Three.js). |
+| Backend | config loads with the four new fields; all touched modules import; `/health` ok; spectrum events flowing at 25 Hz while speaking (visible as live bars in the SPECTRUM tile and on the reactor). |
+| Cinematic | idle / listening (amber) / speaking screenshots at 1600×900: reactor spans the middle column, six tiles live (CPU 11–13 %, MEM 70 %, VRAM 3.3/13 GB, clock, globe), PIPELINE showed LLM 1297 ms · TOTAL 1811 ms after the first turn. |
+| Panel | 560×860: framed console, three instruments, transcript with YOU/JARVIS, input underline; typed turn answered and spoken. |
+| Compact | first attempt had an **L-shaped grid area** (invalid CSS → everything auto-placed over the reactor). Fixed with a rectangular `convo` column; conversation unfolds left of the reactor, right-aligned, status below; `resting` after `linger_s` verified (`body.className` = `compact resting`, 55 % opacity). |
+| Transparency on the desktop | `jarvis hud` attached to the running backend, desktop captured in physical pixels (2880×1800): reactor floats over Cursor with no visible square. Before the fix the canvas edge measured +17/255 of clipped glow at mid-edge; after the camera margin (fit 2.42 → 2.72), bloom radius 0.65 → 0.5 and the radial mask: ≤ +2/255. |
+| Live turn on the desktop | `POST /chat {speak: true}` → the compact window went to full brightness, unfolded YOU / JARVIS lines beside the reactor, bars followed the voice, `SPEAKING` label; folded and dimmed again after the turn. |
+
+### Known limitations (Phase 6)
+- The Qt window still loads the HUD once; after `npm run build` use tray → *Reload HUD* (or restart).
+- Instruments are decorative-accurate, not instruments: the globe shows nothing real; TELEMETRY's NET axis is log-scaled
+  (0–10 Mbps → 0–1); the SPECTRUM tile shows whichever of Jarvis/mic is live.
+- In compact mode the confirm card is voice-only by design (click-through window). If you want buttons, `Ctrl+Shift+J`
+  switches to panel.
+- Text in compact mode is drawn straight over whatever is behind it (soft shadow, no panel) — on a very busy light
+  background it is still readable but less pretty; panel mode has a backdrop.
+- `tts_first_audio_ms` is sometimes missing from the metrics event for typed turns (shows "—" in PIPELINE); the metric
+  itself is a Phase 2 detail, not touched here.
+
+---
+
+## 13. Git history
 
 Hashes as on GitHub after you rewrote the Phase 2–5 messages on 2026-10-10 (content unchanged; the local commits were
 rebased onto that history, so earlier hashes quoted in this file's history are superseded by these):
 
 ```
+(next)   Phase 6: HUD overhaul — spectrum-driven instrument-ring reactor, side instruments, compact attention behaviour, ui prefs
+0e44ea8  STATUS: update git history hashes after message rewrite + rebase
 f94bfa0  Cleanup after model evaluation: removed Liquid/Parakeet models, test artefacts and scripts (16.2 GB); docs
 6d74444  STATUS: record evaluation commit hash
 0279332  Model evaluation: Liquid LFM2.5 vs Qwen, Parakeet vs Whisper — kept current models (D20); llm.model_opts; docs
