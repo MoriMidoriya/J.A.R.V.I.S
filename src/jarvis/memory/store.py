@@ -74,7 +74,6 @@ def _dt(s: str | None) -> datetime | None:
 class Store:
     def __init__(self, path: Path) -> None:
         self.path = path
-        self._lock = threading.Lock()
         path.parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as c:
             c.executescript(SCHEMA)

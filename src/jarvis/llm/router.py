@@ -6,7 +6,6 @@ see `llm/ollama.py` for why). Everything else goes through LiteLLM using its mod
 
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 import time
@@ -19,6 +18,7 @@ from loguru import logger
 
 from jarvis.config import Settings
 from jarvis.llm.ollama import OllamaClient, OllamaStats
+from jarvis.tasks import spawn
 
 THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
 
@@ -151,7 +151,7 @@ class LLMRouter:
             yield vision
         finally:
             if swap:
-                asyncio.get_running_loop().create_task(self.ollama.warm(chat_name))
+                spawn(self.ollama.warm(chat_name), name="ollama-rewarm")
 
     # ---- streaming completion ------------------------------------------------------------------
     async def stream(
@@ -169,8 +169,10 @@ class LLMRouter:
         opts = self.s.llm.opts_for(model)
         if temperature is None:
             temperature = self.s.llm.temperature if opts.temperature is None else opts.temperature
-        kw = dict(tools=tools, on_text=on_text, max_tokens=max_tokens or self.s.llm.max_tokens,
-                  temperature=temperature, timeout=timeout or self.s.llm.request_timeout_s)
+        kw = {
+            "tools": tools, "on_text": on_text, "max_tokens": max_tokens or self.s.llm.max_tokens,
+            "temperature": temperature, "timeout": timeout or self.s.llm.request_timeout_s,
+        }
         if self.is_local(model):
             return await self._stream_ollama(model, messages, think=opts.think, **kw)
         return await self._stream_litellm(model, messages, **kw)
@@ -196,7 +198,8 @@ class LLMRouter:
         async def on_delta(d: str) -> None:
             await push(filt.feed(d))
 
-        raw_text, raw_calls, stats, first = await self.ollama.chat_stream(
+        # The raw text is rebuilt from the deltas via push() (think-filtered); only the calls/stats are needed here.
+        _, raw_calls, stats, first = await self.ollama.chat_stream(
             model.split("/", 1)[1], messages, tools=tools or None, on_text=on_delta,
             temperature=temperature, max_tokens=max_tokens, timeout=timeout,
             think=None if think == "on" else False,

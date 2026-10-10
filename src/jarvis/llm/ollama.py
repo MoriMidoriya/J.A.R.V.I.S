@@ -162,13 +162,6 @@ class OllamaClient:
                     )
         return text, tool_calls, stats, first
 
-    async def warm_connection(self) -> None:
-        """Open the keep-alive connection ahead of the first real request."""
-        try:
-            await self._http().get("/api/version", timeout=3.0)
-        except Exception as e:  # noqa: BLE001
-            logger.debug("ollama warm_connection: {}", e)
-
     async def unload(self, model: str, wait_s: float = 5.0) -> None:
         """Evict a model from VRAM and wait until it is really gone.
 
@@ -182,7 +175,8 @@ class OllamaClient:
             await self._http().post("/api/generate", json={"model": model, "keep_alive": 0}, timeout=30)
             while time.perf_counter() - t0 < wait_s:
                 ps = (await self._http().get("/api/ps", timeout=3)).json().get("models", [])
-                if not any(m.get("name", "").split(":")[0] == model.split(":")[0] and m.get("size_vram", 0) > 0 for m in ps):
+                family = model.split(":", 1)[0]
+                if not any(m.get("name", "").split(":", 1)[0] == family and m.get("size_vram", 0) > 0 for m in ps):
                     break
                 await asyncio.sleep(0.1)
             logger.debug("ollama unloaded {} in {:.0f} ms", model, (time.perf_counter() - t0) * 1000)
@@ -240,11 +234,3 @@ def ensure_running(base_url: str, wait_s: float = 25.0) -> bool:
         time.sleep(0.5)
     logger.error("Ollama API still unreachable after {:.0f}s", wait_s)
     return False
-
-
-def loaded_models(base_url: str) -> list[dict]:
-    """What Ollama currently holds in memory (name, size_vram) — handy for VRAM budgeting."""
-    try:
-        return httpx.get(f"{base_url}/api/ps", timeout=2).json().get("models", [])
-    except Exception:  # noqa: BLE001
-        return []

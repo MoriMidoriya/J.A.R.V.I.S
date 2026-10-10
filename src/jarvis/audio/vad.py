@@ -98,6 +98,3 @@ class SileroVAD:
     @property
     def speaking(self) -> bool:
         return self.state.speaking
-
-    def elapsed_s(self) -> float:
-        return sum(len(b) for b in self.state.buf) / 16000

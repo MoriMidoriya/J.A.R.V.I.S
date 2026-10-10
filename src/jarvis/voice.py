@@ -82,12 +82,10 @@ class VoicePipeline:
         self._prompted = False  # already said "Yes, sir?" for this wake
         self._hot_window = False  # listening without a wake word, right after a reply
         self._confirm_fut: asyncio.Future[str] | None = None
-        self._frame_i = 0
         self._wake_threshold = wake.threshold
         self._wake_threshold_speaking = min(0.9, wake.threshold + 0.2)
         # HUD bar ring while listening: 24 bands per 80 ms mic frame (+6 dB: a room mic is quieter than Kokoro at full scale)
         self._mic_bands = BandAnalyzer(mic.sr, mic.frame, fmax=min(6000.0, mic.sr / 2 - 1), gain_db=6.0)
-        self.last_stt_ms: int | None = None
         self._announce_queue: list[str] = []  # reminders that came due while we were busy
         self.bus.on("reminder.due", self._on_reminder_due)
         # Text-only mode: the HUD's settings drawer / tray / the text_mode tool change ui.text_only through the hub,
@@ -117,7 +115,6 @@ class VoicePipeline:
         logger.info("voice pipeline ready — say 'Hey Jarvis'")
         while True:
             frame = await self.mic.queue.get()
-            self._frame_i += 1
             try:
                 await self._on_frame(frame)
             except Exception:  # noqa: BLE001
@@ -215,7 +212,6 @@ class VoicePipeline:
         await self.set_state(State.THINKING)
         tr = await asyncio.to_thread(self.stt.transcribe, utt.audio)
         stt_ms = int((time.perf_counter() - t0) * 1000)
-        self.last_stt_ms = stt_ms
         logger.info("heard ({:.1f}s audio, {} ms stt): {!r}", utt.duration_s, stt_ms, tr.text)
 
         if was_confirming:
@@ -364,6 +360,9 @@ class VoicePipeline:
     async def confirm(self, _id: str, prompt: str) -> bool:
         """Registry confirm handler: speak the question, listen for yes/no (two attempts)."""
         for attempt in range(2):
+            # The future exists *before* the question is spoken: the HUD card (and /confirm) are live from the
+            # confirm.request event, and a Yes/No clicked while the question is still being read must not be lost.
+            self._confirm_fut = asyncio.get_running_loop().create_future()
             # No speaker.cancel() here: that would invalidate the turn's own Utterance (same generation), so whatever
             # the tool/LLM says *after* the confirmation would be dropped silently and the turn would never reach its
             # listening window (state stuck at SPEAKING). say() queues behind anything still playing anyway.
@@ -372,7 +371,6 @@ class VoicePipeline:
             self._drain_mic()
             self.vad.reset()
             self._listen_since = time.monotonic()
-            self._confirm_fut = asyncio.get_running_loop().create_future()
             await self.set_state(State.CONFIRMING)
             try:
                 answer = await asyncio.wait_for(self._confirm_fut, timeout=self.s.tools.confirm_timeout_s + 2)

@@ -83,7 +83,6 @@ class TTSCfg(BaseModel):
     engine: Literal["kokoro", "elevenlabs", "openai"] = "kokoro"
     voice: str = "bm_george"
     speed: float = 1.0
-    comm_link_fx: bool = False
 
 
 class AudioCfg(BaseModel):
@@ -107,7 +106,6 @@ class UICfg(BaseModel):
     port: int = 8765
     hotkey_text_input: str = "<ctrl>+<shift>+j"
     hotkey_toggle_hud: str = "<ctrl>+<shift>+h"
-    start_with_windows: bool = False
     # ---- user preferences (editable from the HUD's settings drawer; persisted in data/ui.json, which overrides the
     # values below — see load_ui_prefs / save_ui_prefs) -------------------------------------------------------------
     # Attention behaviour (compact mode): the reactor sits dimmed in the corner; "Hey Jarvis" brings it to full

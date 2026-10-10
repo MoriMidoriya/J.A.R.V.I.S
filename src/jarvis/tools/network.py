@@ -43,7 +43,7 @@ def _radio(kind: Literal["WiFi", "Bluetooth"], state: Literal["On", "Off", "quer
     script = _RADIO_PS.format(kind=kind, state=state)
     r = subprocess.run(
         ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
-        capture_output=True, text=True, timeout=25, creationflags=subprocess.CREATE_NO_WINDOW,
+        capture_output=True, text=True, timeout=25, creationflags=subprocess.CREATE_NO_WINDOW, check=False,
     )
     out = (r.stdout or "").strip()
     logger.debug("radio {} {} -> rc={} {}", kind, state, r.returncode, out or r.stderr.strip()[:200])
@@ -76,7 +76,7 @@ def set_bluetooth(state: Annotated[Literal["on", "off"], Field(description="on o
 
 def _wlan_interface() -> dict[str, str]:
     try:
-        out = subprocess.run(["netsh", "wlan", "show", "interfaces"], capture_output=True, text=True, timeout=5, creationflags=subprocess.CREATE_NO_WINDOW).stdout
+        out = subprocess.run(["netsh", "wlan", "show", "interfaces"], capture_output=True, text=True, timeout=5, creationflags=subprocess.CREATE_NO_WINDOW, check=False).stdout
     except Exception:  # noqa: BLE001
         return {}
     info: dict[str, str] = {}

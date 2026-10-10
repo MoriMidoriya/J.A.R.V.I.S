@@ -46,7 +46,6 @@ tts:
   engine: kokoro                 # kokoro | elevenlabs | openai
   voice: bm_george               # kokoro voices: bm_george, bm_lewis, bm_daniel, bm_fable, bf_emma ...
   speed: 1.0
-  comm_link_fx: false
 
 audio:
   input_device: null             # null = system default; or device index/name from `jarvis doctor`
@@ -64,7 +63,7 @@ ui:
   port: 8765
   hotkey_text_input: <ctrl>+<shift>+j
   hotkey_toggle_hud: <ctrl>+<shift>+h
-  start_with_windows: false
+  # Start at sign-in: `uv run jarvis autostart on|off|status` (a shortcut in the Startup folder, not a setting here).
   # HUD preferences. These are the defaults; whatever you change in the HUD's own settings drawer (⚙ in panel/cinematic,
   # or tray → Settings…) is saved to data/ui.json and overrides the values here.
   # Compact-mode attention behaviour: the reactor rests dimmed; "Hey Jarvis" brings it to full brightness and unfolds the

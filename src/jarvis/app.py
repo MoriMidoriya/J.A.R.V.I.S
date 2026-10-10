@@ -32,6 +32,7 @@ from jarvis.server.api import build_app
 from jarvis.server.api import serve as serve_api
 from jarvis.server.hub import Hub
 from jarvis.stt import make_stt
+from jarvis.tasks import spawn
 from jarvis.tools import hud as hud_tools
 from jarvis.tools import screen
 from jarvis.tools.all import registry
@@ -65,19 +66,6 @@ class JarvisApp:
         )
         self.reminders = ReminderService(self.bus)
         self.llm_ready = asyncio.Event()
-        self._bg: list[asyncio.Future] = []
-
-    def _spawn(self, coro, name: str) -> asyncio.Task:
-        """Background task whose failure is *logged* — a bare create_task() dies silently (bit us under pythonw)."""
-        task = asyncio.get_running_loop().create_task(coro, name=name)
-
-        def _done(t: asyncio.Task) -> None:
-            if not t.cancelled() and t.exception() is not None:
-                logger.opt(exception=t.exception()).error("background task {} failed", name)
-
-        task.add_done_callback(_done)
-        self._bg.append(task)
-        return task
 
     async def start(self) -> None:
         t0 = time.perf_counter()
@@ -86,11 +74,11 @@ class JarvisApp:
         self.loop = loop
 
         # HUD server first, so the window can connect and show the boot sequence while models load.
-        self._spawn(serve_api(build_app(self.s, self.hub, self.agent), self.s.ui.host, self.s.ui.port), "hud-server")
+        spawn(serve_api(build_app(self.s, self.hub, self.agent), self.s.ui.host, self.s.ui.port), "hud-server")
         # Kick the LLM warmup off first; it overlaps with the audio model loads.
-        self._spawn(self._warm_llm(), "llm-warmup")
+        spawn(self._warm_llm(), "llm-warmup")
         # Pre-build the Start Menu app index so the first "open X" doesn't pay the ~1 s scan mid-turn.
-        self._bg.append(loop.run_in_executor(None, self._warm_apps_index))
+        loop.run_in_executor(None, self._warm_apps_index)
 
         tts_f = loop.run_in_executor(None, self._load_tts)
         stt_f = loop.run_in_executor(None, self._load_stt)
@@ -104,7 +92,7 @@ class JarvisApp:
         registry.confirm_handler = self.pipeline.confirm
         self.hub.pipeline = self.pipeline
         self.reminders.start()  # after the pipeline exists so due reminders have someone to announce them
-        self._spawn(self._system_stats(), "system-stats")
+        spawn(self._system_stats(), "system-stats")
 
         logger.info("audio stack ready in {:.1f}s", time.perf_counter() - t0)
         await self.bus.emit(Notice(text="J.A.R.V.I.S. online"))
@@ -152,7 +140,7 @@ class JarvisApp:
             logger.warning("llm warmup failed: {}", e)
         self.llm_ready.set()
         if self.router.is_local(self.s.llm.primary):
-            self._spawn(self._keepalive(), "ollama-keepalive")
+            spawn(self._keepalive(), "ollama-keepalive")
 
     def request_stop(self) -> None:
         """Thread-safe: cancel every task in the backend loop so `asyncio.run(start())` unwinds (mic/TTS close)."""

@@ -14,6 +14,8 @@ from typing import Any, Literal
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from jarvis.tasks import spawn
+
 
 class State(StrEnum):
     BOOTING = "booting"
@@ -40,11 +42,6 @@ class StateChanged(Event):
 class WakeDetected(Event):
     type: Literal["wake"] = "wake"
     score: float
-
-
-class TranscriptPartial(Event):
-    type: Literal["transcript.partial"] = "transcript.partial"
-    text: str
 
 
 class TranscriptFinal(Event):
@@ -198,10 +195,10 @@ class EventBus:
     def emit_nowait(self, event: Event) -> None:
         """Fire-and-forget from sync code running inside the loop thread."""
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
             return
-        loop.create_task(self.emit(event))
+        spawn(self.emit(event), name=f"emit:{event.type}")
 
     def emit_threadsafe(self, loop: asyncio.AbstractEventLoop, event: Event) -> None:
         """Fire from a non-loop thread (audio callbacks)."""

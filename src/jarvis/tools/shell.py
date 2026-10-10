@@ -35,7 +35,7 @@ def run_powershell(
     try:
         r = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
-            capture_output=True, text=True, timeout=timeout_s, creationflags=subprocess.CREATE_NO_WINDOW, encoding="utf-8", errors="replace",
+            capture_output=True, text=True, timeout=timeout_s, creationflags=subprocess.CREATE_NO_WINDOW, encoding="utf-8", errors="replace", check=False,
         )
     except subprocess.TimeoutExpired:
         _audit(command, None, "TIMEOUT")
@@ -45,7 +45,7 @@ def run_powershell(
     _audit(command, r.returncode, out or err)
     if r.returncode and not out:
         raise ToolError(f"Exit code {r.returncode}: {err[:500] or 'no output'}")
-    text = out if out else "(no output)"
+    text = out or "(no output)"
     if err:
         text += f"\n[stderr] {err[:500]}"
     return text if len(text) <= MAX_OUT else text[:MAX_OUT] + f"\n… [{len(text)} chars total]"

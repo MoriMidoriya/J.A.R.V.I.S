@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import time
 from pathlib import Path
@@ -14,14 +15,12 @@ from jarvis.stt.base import STTEngine, Transcript, sanitize
 
 def _expose_cuda_dlls() -> None:
     """CTranslate2 needs cuBLAS/cuDNN DLLs on the search path; the torch wheel ships them."""
-    try:
+    with contextlib.suppress(Exception):  # no torch → CTranslate2 falls back to whatever is on PATH
         import torch
 
         lib = Path(torch.__file__).parent / "lib"
         if lib.exists():
             os.add_dll_directory(str(lib))
-    except Exception:  # noqa: BLE001
-        pass
 
 
 class FasterWhisperSTT(STTEngine):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import os
 import shutil
@@ -87,10 +88,8 @@ def check_ctranslate2(r: Report) -> None:
 
     n = ctranslate2.get_cuda_device_count()
     types = []
-    try:
+    with contextlib.suppress(Exception):  # purely informational; an odd CTranslate2 build must not fail the doctor
         types = ctranslate2.get_supported_compute_types("cuda") if n else ctranslate2.get_supported_compute_types("cpu")
-    except Exception:  # noqa: BLE001
-        pass
     r.add(
         "CTranslate2 CUDA",
         n > 0,
@@ -138,9 +137,9 @@ def check_ollama(r: Report) -> None:
         resp = httpx.get(f"{s.llm.ollama_base_url}/api/tags", timeout=3)
         models = [m["name"] for m in resp.json().get("models", [])]
         r.add("Ollama server", True, f"{len(models)} models: {', '.join(models) or '(none yet)'}")
-        wanted = [m.split("/", 1)[1] for m in (s.llm.primary, s.llm.fast, s.llm.vision) if m and m.startswith("ollama/")]
-        for w in wanted:
-            have = any(m == w or m.startswith(w + ":") or m.split(":")[0] == w.split(":")[0] and m == w for m in models)
+        wanted = dict.fromkeys(m.split("/", 1)[1] for m in (s.llm.primary, s.llm.fast, s.llm.vision) if m and m.startswith("ollama/"))
+        for w in wanted:  # de-duplicated, in order (primary and fast are usually the same model)
+            have = any(m == w or m.startswith(w + ":") for m in models)  # "qwen3:8b" exact, or "qwen3" → any tag
             r.add(f"  model {w}", have, "pulled" if have else "missing", f"ollama pull {w}", warn=not have)
     except Exception as e:  # noqa: BLE001
         r.add("Ollama server", False, f"{type(e).__name__}", "Start Ollama (it runs in the tray) or `winget install Ollama.Ollama`")
@@ -171,10 +170,8 @@ def check_node(r: Report) -> None:
     node = shutil.which("node")
     ver = ""
     if node:
-        try:
-            ver = subprocess.run([node, "--version"], capture_output=True, text=True, timeout=5).stdout.strip()
-        except Exception:  # noqa: BLE001
-            pass
+        with contextlib.suppress(Exception):
+            ver = subprocess.run([node, "--version"], capture_output=True, text=True, timeout=5, check=False).stdout.strip()
     r.add("Node.js (HUD build)", node is not None, ver or "not found", "winget install OpenJS.NodeJS.LTS", warn=node is None)
     dist = ROOT / "hud" / "dist" / "index.html"
     r.add("HUD built (hud/dist)", dist.exists(), str(dist.parent) if dist.exists() else "not built", "cd hud && npm install && npm run build", warn=not dist.exists())

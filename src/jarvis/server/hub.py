@@ -19,10 +19,11 @@ Protocol (JSON objects, one per message)
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from collections import deque
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import WebSocket, WebSocketDisconnect
 from loguru import logger
@@ -30,6 +31,10 @@ from pydantic import ValidationError
 
 from jarvis.config import Settings, save_ui_prefs, ui_prefs, update_ui_prefs
 from jarvis.events import Event, EventBus, UiPrefs
+from jarvis.tasks import spawn
+
+if TYPE_CHECKING:
+    from jarvis.voice import VoicePipeline
 
 HIGH_RATE = {"audio.level", "mic.level", "spectrum", "system.stats"}  # droppable when a client lags; everything else is delivered in order
 HISTORY_TYPES = {"transcript.final", "assistant.final", "tool.call", "tool.result", "notice", "reminder.due"}
@@ -45,7 +50,7 @@ class Hub:
         self.state = "booting"
         self.history: deque[dict[str, Any]] = deque(maxlen=40)  # replayed to late-joining clients
         self.pending_confirm: dict[str, Any] | None = None  # so a (re)connecting HUD can still show the buttons
-        self.pipeline = None  # set by the app once the voice pipeline exists
+        self.pipeline: VoicePipeline | None = None  # set by the app once the voice pipeline exists
         self.on_shutdown: Callable[[], None] | None = None  # set by the app; lets `POST /shutdown` stop the process
         bus.on(None, self._on_event)
 
@@ -67,10 +72,8 @@ class Hub:
         for q in self.clients.values():
             if q.full() and ev.type in HIGH_RATE:
                 continue  # client is behind: skip this level sample, never skip transcript/state/tool events
-            try:
+            with contextlib.suppress(asyncio.QueueFull):
                 q.put_nowait(msg)
-            except asyncio.QueueFull:
-                pass
 
     async def _writer(self, ws: WebSocket, q: asyncio.Queue[str]) -> None:
         while True:
@@ -123,7 +126,7 @@ class Hub:
                 raw = await ws.receive_text()
                 try:
                     # Commands may take seconds (a whole spoken turn); never block this client's receive loop on them.
-                    asyncio.create_task(self._handle_logged(json.loads(raw), ws))
+                    spawn(self._handle_logged(json.loads(raw), ws), name="hud-command")
                 except Exception:  # noqa: BLE001
                     logger.exception("bad HUD message: {}", raw[:200])
         except WebSocketDisconnect:
@@ -153,10 +156,8 @@ class Hub:
         if kind == "ui.prefs":
             patch = msg.get("prefs")
             if isinstance(patch, dict):
-                try:
+                with contextlib.suppress(ValidationError):  # already logged by set_prefs
                     await self.set_prefs(patch)
-                except ValidationError:
-                    pass
             return
         p = self.pipeline
         if p is None:

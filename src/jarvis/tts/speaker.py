@@ -41,10 +41,6 @@ class Speaker:
         self.bus.emit_threadsafe(self.loop, Spectrum(source="out", bands=[round(float(b), 2) for b in bands]))
 
     # ---- speaking ------------------------------------------------------------------------------
-    @property
-    def is_speaking(self) -> bool:
-        return self.player.is_playing or any(not f.done() for f in self._pending)
-
     def begin(self) -> Utterance:
         self._t0 = time.perf_counter()
         self._first_audio_ms = None
@@ -115,12 +111,11 @@ class Utterance:
         if self.gen == self.sp._gen and not self.silent:
             for sentence in self.chunker.flush():
                 self._schedule(sentence)
-        pend = [f for f in self.sp._pending]
+        pend = list(self.sp._pending)
         if pend:
-            await asyncio.gather(*pend, return_exceptions=True)
+            await asyncio.gather(*pend, return_exceptions=True)  # every sentence synthesised and enqueued…
         if self.gen == self.sp._gen:
-            await asyncio.sleep(0.05)
-            await self.sp.player.wait_idle()
+            await self.sp.player.wait_idle()  # …and played (the player counts enqueued chunks, so no gap to race)
 
     @property
     def cancelled(self) -> bool:

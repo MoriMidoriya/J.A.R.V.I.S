@@ -42,16 +42,20 @@ class ToolSpec:
     confirm_prompt: str | None = None  # format string, e.g. "Shut down the PC in {delay} seconds?"
     is_async: bool = False
     speak_result: bool = False  # result is already user-facing prose: speak it verbatim, skip the follow-up LLM round
+    _schema: dict[str, Any] | None = field(default=None, repr=False, compare=False)
 
     def schema(self) -> dict[str, Any]:
-        s = self.params_model.model_json_schema()
-        s.pop("title", None)
-        for p in s.get("properties", {}).values():
-            p.pop("title", None)
-        return {
-            "type": "function",
-            "function": {"name": self.name, "description": self.description, "parameters": s},
-        }
+        """OpenAI-style function schema. Static per tool, so built once (51 tools cost ~4 ms per LLM round otherwise)."""
+        if self._schema is None:
+            s = self.params_model.model_json_schema()
+            s.pop("title", None)
+            for p in s.get("properties", {}).values():
+                p.pop("title", None)
+            self._schema = {
+                "type": "function",
+                "function": {"name": self.name, "description": self.description, "parameters": s},
+            }
+        return self._schema
 
     def render(self, template: str | None, args: dict[str, Any]) -> str:
         if not template:

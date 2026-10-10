@@ -110,7 +110,7 @@ def _scan_start_apps() -> list[dict[str, str]]:
     """`Get-StartApps` lists every app pinned into the Start Menu: desktop, UWP, Store — with a launchable AppID."""
     cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", "Get-StartApps | Select-Object Name, AppID | ConvertTo-Json -Compress"]
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW).stdout
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW, check=False).stdout
         data = json.loads(out) if out.strip() else []
         if isinstance(data, dict):
             data = [data]

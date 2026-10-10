@@ -67,7 +67,6 @@ class _Gate:
 
     def __init__(self, emit: Callable[[str], Awaitable[None]], guard: bool) -> None:
         self._emit = emit
-        self._guard = guard
         self._buf = ""
         self._decided = not guard
         self.held = False

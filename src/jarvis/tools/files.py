@@ -72,7 +72,8 @@ def _windows_search(query: str, kind: Kind, folder: str | None, max_results: int
         elif kind != "any" and kind in KIND_EXT:
             conds.append("(" + " OR ".join(f"System.ItemType = '.{e}'" for e in sorted(KIND_EXT[kind])) + ")")
         if folder:
-            conds.append(f"SCOPE='file:{folder}'")
+            scope = folder.replace("'", "''")  # a ' in the folder name would otherwise break the query
+            conds.append(f"SCOPE='file:{scope}'")
         if not conds:
             return []
         where = " AND ".join(conds)

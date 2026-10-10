@@ -53,7 +53,6 @@ export type ServerEvent =
   | UiCommand
   | { type: "state"; state: JarvisState }
   | { type: "wake"; score: number }
-  | { type: "transcript.partial"; text: string }
   | { type: "transcript.final"; text: string; source: "voice" | "text" }
   | { type: "assistant.token"; text: string }
   | { type: "assistant.final"; text: string }

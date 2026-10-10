@@ -13,7 +13,7 @@ from jarvis.tools.registry import ToolError, tool
 
 
 def _shutdown(args: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["shutdown", *args], capture_output=True, text=True, timeout=10, creationflags=subprocess.CREATE_NO_WINDOW)
+    return subprocess.run(["shutdown", *args], capture_output=True, text=True, timeout=10, creationflags=subprocess.CREATE_NO_WINDOW, check=False)
 
 
 @tool(summary="Lock PC", confirm_prompt="Lock the PC now?")

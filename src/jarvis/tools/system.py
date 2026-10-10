@@ -20,6 +20,7 @@ def gpu_status() -> dict[str, Any] | None:
             text=True,
             timeout=3,
             creationflags=subprocess.CREATE_NO_WINDOW,
+            check=False,
         ).stdout.strip()
         name, util, used, total, temp = [s.strip() for s in out.split(",")]
         return {"name": name, "util_pct": int(util), "vram_used_mb": int(used), "vram_total_mb": int(total), "temp_c": int(temp)}
