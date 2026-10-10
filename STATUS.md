@@ -713,6 +713,7 @@ Keep: `qwen3:8b`, `qwen2.5vl:7b`, the Whisper and Kokoro caches, `~/.cache/huggi
 ## 12. Git history
 
 ```
+18ebba9  Model evaluation: Liquid LFM2.5 vs Qwen, Parakeet vs Whisper — kept current models (D20); llm.model_opts; docs
 fc6b5f3  STATUS: record Phase 5 commit hash
 18e257c  Phase 5: conversation persistence, autostart, two-process launcher (D18), pythonw fixes, docs
 9be730b  Phase 4: WebSocket hub + FastAPI, Three.js HUD, PySide6 overlay, vision_swap, docs
