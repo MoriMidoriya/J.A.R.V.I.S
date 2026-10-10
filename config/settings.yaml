@@ -15,6 +15,7 @@ llm:
   #   ollama/qwen3:8b   11/12 commands correct, ~0.3-0.6 s/turn, 5 GB VRAM  <- default (leaves room for Whisper+Kokoro+HUD on GPU)
   #   ollama/qwen3:14b  11/12 commands correct, ~0.5-0.9 s/turn, 10 GB VRAM (tight; Whisper may spill to CPU)
   #   anthropic/claude-sonnet-4-5, openai/gpt-4.1-mini, gemini/gemini-2.5-flash, groq/llama-3.3-70b-versatile (need keys in .env)
+  # Evaluated and rejected 2026-10-10 (STATUS.md §10): Liquid LFM2.5 8B-A1B / 2.6B / 1.2B (33, 36, 18 of 44 tool calls vs 44/44 here).
   primary: ollama/qwen3:8b
   fast: ollama/qwen3:8b          # reserved for short internal calls (classification, summaries)
   vision: ollama/qwen2.5vl:7b    # used when an image / screenshot is attached
@@ -26,8 +27,14 @@ llm:
   ollama_num_ctx: 8192
   ollama_keep_alive: 30m           # keep the model loaded in VRAM between turns
   max_tool_rounds: 6
+  # Per-model overrides, keyed by model string (exact or prefix). Only needed for reasoning models that ignore `think: false`:
+  #   think: off (default, Qwen3) | on (model thinks; Ollama keeps it out of the reply) | prefill (skip thinking via an empty <think> block)
+  # model_opts:
+  #   ollama/LiquidAI/lfm2.5-2.6b: { think: prefill, temperature: 0.1 }
 
 stt:
+  # faster-whisper large-v3-turbo kept over NVIDIA Parakeet-TDT 0.6B v3 (2026-10-10, STATUS.md §10.3): same accuracy on clean
+  # speech, but Parakeet's WER doubles in noise, it has no vocabulary prompt, and its GPU build needs 3.6 GB VRAM vs 1.2 GB.
   engine: faster_whisper         # faster_whisper | moonshine | openai | groq
   model: large-v3-turbo
   device: cuda                   # cuda | cpu | auto

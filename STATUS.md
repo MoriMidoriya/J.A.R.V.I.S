@@ -3,8 +3,8 @@
 Voice-first, local-first Windows assistant with full PC control and an Iron Man HUD.
 Design: [`PLAN.md`](PLAN.md) · Setup/usage: [`README.md`](README.md) · Root: `C:\Users\Mori\jarvis`
 
-**Last updated: 2026-10-10 (session 2, Phases 4 and 5 done — all planned phases complete).** This file is the single source of
-truth for *what exists, how it works, what was measured, and why decisions were made*. It is updated at the end of every phase.
+**Last updated: 2026-10-10 (session 3 — lighter-model evaluation, §10; all planned phases complete).** This file is the single
+source of truth for *what exists, how it works, what was measured, and why decisions were made*. It is updated at the end of every phase.
 
 ---
 
@@ -18,6 +18,7 @@ truth for *what exists, how it works, what was measured, and why decisions were 
 | 3 | Full PC-control tool suite (47 tools) + confirmations + reminders/memory + vision | ✅ done, 22/22 LLM test |
 | 4 | Iron Man HUD: FastAPI/WebSocket hub + Three.js reactor + PySide6 transparent overlay, text & image input | ✅ done, verified live |
 | 5 | Conversation persistence across restarts, start-with-Windows, two-process launcher, boot-time fix | ✅ done, verified live |
+| — | Lighter-model evaluation: Liquid LFM2.5 (vs Qwen3 / Qwen2.5-VL) and Parakeet-TDT (vs Whisper turbo) | ✅ done 2026-10-10 — **kept the current models** (D20, §10) |
 
 Run it today:
 
@@ -36,7 +37,9 @@ First time only: `cd hud; npm install; npm run build` (the HUD is a Vite build; 
 
 **Open for your decision (nothing blocks on these):** (1) run `jarvis autostart on` if you want him at sign-in — I left it
 OFF; (2) `memory.resume_hours: 6` is how long a conversation survives a restart — raise/lower to taste; (3) voice is still
-`bm_george`; try `uv run jarvis say "..."` after editing `tts.voice` (bm_lewis, bf_emma, am_michael, …).
+`bm_george`; try `uv run jarvis say "..."` after editing `tts.voice` (bm_lewis, bf_emma, am_michael, …); (4) **~20 GB of disk
+can be freed** after the model evaluation — the unused `qwen3:14b` and the four Liquid models in Ollama plus my test artefacts
+in `%TEMP%` — see §10.6 for the exact commands. Nothing is deleted until you say so.
 
 ---
 
@@ -63,6 +66,7 @@ OFF; (2) `memory.resume_hours: 6` is how long a conversation survives a restart 
 | D17 | **Transparency via an alpha-from-brightness post pass instead of dropping bloom** (2026-10-10) | Bloom is what makes it look like the films, but Three's bloom pass writes alpha = 1 everywhere. Since the whole scene is light on black, brightness is a faithful coverage value; one 6-line shader restores transparency and keeps the glow. |
 | D18 | **The voice backend is a child *process* of the HUD window, not a thread** (2026-10-10) | Measured: with the backend inside the Qt process every model load was ~1.6× slower (audio stack 16–18 s vs 10 s). Root cause, isolated by five controlled runs (§9): a *visible* Chromium view raises the Windows timer resolution to 1 ms (per-process on Win 11) and Qt/Chromium threads then share the process with Python's GIL, so the four model-loading threads get force-switched 3× more often. Window hidden → fast; window in another process → fast; `--no-ui` with `timeBeginPeriod(1)` forced → slow. `ui/launcher.py` now spawns `python -m jarvis run --no-ui` inside a Job Object (kill-on-close: the backend can never outlive the window), supervises it (restart ×3 on crash), and stops it gracefully via `POST /shutdown`. Bonus: a Chromium/GPU-driver crash in the window no longer kills the assistant. |
 | D19 | **Conversation persistence = replay the last N turns from SQLite if the last one is < `resume_hours` old** (2026-10-10) | Simplest thing that makes "what did I just ask?" work after a restart (or an autostart at sign-in resuming last night's thread) without summarisation machinery. Only user/assistant text is stored, never tool payloads; a `system` marker row written by `/reset` is a hard boundary. 6 h default: long enough for a reboot, short enough that yesterday's context doesn't confuse today's first question. |
+| D20 | **Keep Qwen3-8B, Whisper large-v3-turbo and Qwen2.5-VL-7B; do not switch to Liquid LFM2.5 or Parakeet** (2026-10-10, you asked: "replace if same or just a little worse") | Measured head-to-head on the real stack (§10). **Brain:** qwen3:8b passes the 44-call tool suite 44/44 at 0.63 s/turn; the best Liquid model (LFM2.5-2.6B) reaches 36/44 at 1.9 s/turn with thinking on, or 29/44 at 1.2 s with thinking suppressed, and the 8B-A1B 33/44 at 2.2 s — all of them sometimes say "Done, sir." *without* calling the tool. Not a little worse: a voice assistant that bluffs about having done something is unusable. **Ears:** Parakeet-TDT-0.6B-v3 equals Whisper on clean speech (LibriSpeech WER 3.5 % both; 100 % vs 99 % of command keywords kept) and is 2.5× faster (60 vs 152 ms) with far fewer hallucinations on noise (1/4 vs 4/4 probes), **but** its WER doubles in noise (11 % vs 5 % at 10 dB; 19 % vs 9 % at 5 dB), one-word answers like "Yes." sometimes come out in Cyrillic (no language forcing in the model), it cannot take the Jarvis vocabulary prompt, and the GPU build is *heavier*, not lighter: 3.6 GB VRAM / 2.4 GB disk vs 1.2 GB / 1.5 GB (the 0.6 GB int8 build runs on CPU: slower than Whisper and worse). The premise "more lightweight" does not hold for the variant that performs. **Eyes:** on screenshots with text at real on-screen size, Qwen2.5-VL-7B answers 18/20 (its two misses are defensible) vs LFM2.5-VL-3B 12/20 at the production 1280 px — with confident misreads (error code `D800700E`, "Bluetooth is on" when it was off, wrong speaker). At 1920 px the small model recovers to 15–17/20 but is then no faster. Its 3.2 GB *would* fit beside qwen3:8b and save the ~5 s model swap, but only with ~0.6 GB of VRAM to spare on the full stack — too fragile. Kept as an opt-in (§10.5). |
 
 ### Questions I had for you — answered by default, change if you disagree
 1. **Voice**: kept `bm_george`. Listen to the four `data/voice_bm_*.wav` samples and tell me if you prefer another.
@@ -133,8 +137,8 @@ OFF; (2) `memory.resume_hours: 6` is how long a conversation survives a restart 
 | `audio/output.py` | Playback thread with cancel + RMS meter | 20 ms blocks; `cancel()` stops within ~20 ms. |
 | `stt/` | `faster_whisper.py` (CUDA), `cloud.py` (OpenAI/Groq), `base.py` sanitiser | Strips leading "hey jarvis", drops Whisper hallucinations ("Thank you.", "you", …). |
 | `tts/` | `kokoro.py`, `openai_tts.py`, `elevenlabs.py`, `speaker.py` | `Speaker` streams sentence-by-sentence; `clean_for_speech()` fixes "PC", "%", paths, URLs for pronunciation. |
-| `llm/router.py` | Model router: `ollama/*` → native `OllamaClient`; anything else → LiteLLM | Strips `<think>` blocks; rescues tool calls emitted as JSON text; per-call timeout; fallback model. |
-| `llm/ollama.py` | Ollama lifecycle (`ensure_running`, `/api/ps`) + `OllamaClient` streaming `/api/chat` | Persistent keep-alive connection, `think:false`, `keep_alive`, `num_ctx`, server timing stats (D15). |
+| `llm/router.py` | Model router: `ollama/*` → native `OllamaClient`; anything else → LiteLLM | Strips `<think>` blocks; rescues tool calls emitted as JSON text; per-call timeout; fallback model; per-model `think`/temperature via `llm.model_opts` (§10.5). |
+| `llm/ollama.py` | Ollama lifecycle (`ensure_running`, `/api/ps`) + `OllamaClient` streaming `/api/chat` | Persistent keep-alive connection, `think: false` (or omitted for always-reasoning models), `keep_alive`, `num_ctx`, server timing stats (D15). |
 | `llm/agent.py` | Tool-calling loop; vision turns; conversation persistence (D19) | **Bluff guard**: if the model says "Opening X…" without calling a tool, the text is held back and the model is nudged once to actually call it. `_restore_history()` on start, `_persist()` per turn, `reset()` writes a boundary marker. |
 | `llm/intents.py` | Fast-path regexes + greeting templates | 4 day-parts × 3–4 variants; yes/no classifier for confirmations. |
 | `llm/chunker.py` | Sentence splitter for streaming TTS | Handles "3.5", "p.m.", abbreviations. |
@@ -283,7 +287,8 @@ A real human voice scores far higher than SAPI's David (0.92–1.00 in every inj
 | **qwen2.5vl:7b** (6 GB) | 3.0 s | **1.2–1.3 s** (1,376 tokens) | Correct, reads title text. **Kept as default.** |
 | gemma3:4b (3.3 GB) | — | 21 s (its SigLIP encoder runs slowly in Ollama) | Rejected; removed again. |
 
-Image width 1024 px would save ~0.5 s per look but loses small text; kept 1280.
+Image width 1024 px would save ~0.5 s per look but loses small text; kept 1280. (LFM2.5-VL-3B was evaluated later with
+ground-truth screenshots — see §10.4.)
 
 ### Known limitations (Phase 3)
 - Vision costs ~5–6 s because the two models must swap in 12 GB; the chat model is back ~3 s later (hidden unless you ask something immediately).
@@ -502,12 +507,190 @@ process removes both at once → **10.6 s with the window visible** (and 11.2 s 
 
 ---
 
-## 10. Tuning cheat-sheet (`config/settings.yaml`)
+## 10. Lighter-model evaluation — Liquid LFM2.5 and NVIDIA Parakeet (2026-10-10)
+
+You asked whether the [Liquid AI LFM2.5 family](https://www.liquid.ai/models) could replace Qwen (brain and eyes) and
+NVIDIA Parakeet could replace Whisper turbo (ears), "if they are the same or just a little worse", because they are smaller.
+Everything below was measured on this laptop, on the real JARVIS code paths, one model at a time on the GPU. **Result: all three
+stay as they are (D20).** The one code change that remains is a small, default-off config feature (§10.5).
+
+### 10.1 Candidates and what they are
+
+| Role | Current | Candidate(s) tried | Notes |
+|---|---|---|---|
+| Brain (tools + chat) | `qwen3:8b` (Q4_K_M, 5.2 GB disk, 6.19 GB VRAM at 8k ctx) | `lfm2.5:8b` = LFM2.5-8B-A1B (MoE, 8.3B total / 1.5B active, 5.2 GB disk, 5.37 GB VRAM) · `LiquidAI/lfm2.5-2.6b` (1.7 GB, ~1.8 GB VRAM) · `LiquidAI/lfm2.5-1.2b-instruct` (0.73 GB, 0.84 GB VRAM) | The 8B-A1B and 2.6B are *reasoning* models: every answer starts with a chain of thought. Ollama's `think: false` (what we send to Qwen3) is ignored by LFM — the `<think>` text leaked into the reply and hit the token cap, so the first smoke test returned empty replies. Handled three ways (§10.5): let it think (`on`), or pre-fill an empty `<think></think>` block so it skips straight to the answer (`prefill`; works for 2.6B, not for 8B which then stops calling tools). Liquid's recommended sampling (T 0.1–0.2, top-k 50–80, rep 1.05–1.1) was used. |
+| Eyes (screenshots) | `qwen2.5vl:7b` (6.0 GB disk, 5.87 GB VRAM) | `hf.co/LiquidAI/LFM2.5-VL-3B-GGUF:Q8_0` (3.5 GB disk, 3.2 GB VRAM) | Not in the Ollama library; the HF GGUF loads fine in Ollama 0.34 (an older "missing tensor output_norm" bug was fixed before 0.14.4). The 450M/1.6B VL variants were skipped — the 3B is already the smallest that could plausibly read a screen. |
+| Ears (STT) | faster-whisper `large-v3-turbo` int8_float16, beam 1, English forced, Jarvis vocabulary in `initial_prompt` (1.55 GB disk, **1.23 GB VRAM**) | `nvidia/parakeet-tdt-0.6b-v3` (FastConformer-TDT, 600M params, 25 European languages, punctuation + casing, CC-BY-4.0) via `onnx-asr` 0.12 on onnxruntime-gpu 1.24.4 (CUDA 12 build). fp32 encoder: 2.43 GB disk, **3.6 GB VRAM**; int8 encoder: 0.64 GB disk, 0.42 GB VRAM but its quantised ops run on the CPU | NeMo (NVIDIA's own runtime) is a 2+ GB install and pins its own torch, so the ONNX export was the realistic way in. Ran in a throwaway venv so the project venv stayed untouched; CUDA DLLs were borrowed from the project's torch (`os.add_dll_directory` + `onnxruntime.preload_dlls`). Gotchas found: onnxruntime ≥ 1.24 refuses the Hugging Face blob-cache layout for the 2.3 GB external-data file ("escapes model directory") → download with `local_dir=`; the very first inference ever took **48 s** (PTX JIT, cached by the driver afterwards: 0.75 s on the next process start, then 50–90 ms). onnxruntime-gpu ≥ 1.27 is CUDA 13 — it would clash with torch's cu128 in one process, so the pin would have to be `<1.27`. |
+
+### 10.2 Brain — tool-calling suite (same 22 commands as Phase 3, ×2 runs, plus persona and multi-step checks)
+
+Method: `agent.respond()` end-to-end with the full 47-tool registry, scratch SQLite (your real conversation/memory DB was
+never touched), confirm-tier tools auto-declined, side-effect tools (`press_keys`, `open_url`, `web_search`,
+`describe_screen`) stubbed. A case passes if the expected tool is called with sensible arguments (judged the same way for every
+model). VRAM from Ollama's `/api/ps` at 8k context.
+
+| Model | Thinking | T | Tool suite | Turn p50 / p90 | First visible token p50 | Gen speed | Tokens generated per turn (median) | Replied without calling a tool ("Done, sir.") | Persona answers (words; asked for ≤ 2 sentences) | 2-step commands |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **qwen3:8b** (current) | off | 0.6 | **44/44** | **626 / 2017 ms** | 313 ms | 78 tok/s | 31 | **0** | 13–40 | 2/2¹ |
+| lfm2.5:8b (8B-A1B) | on | 0.2 | 33/44 (75 %) | 2166 / 3883 ms | 835 ms | 234 tok/s | 392 (≈ 450–520 chars of thinking) | 7 | 12–42 | 2/2 |
+| lfm2.5-2.6b | on | 0.1 | 36/44 (82 %) | 1904 / 3123 ms | 1055 ms | 174 tok/s | 206 | 4 | 26–128 | 0/2 |
+| lfm2.5-2.6b | prefill (no thinking) | 0.1 | 29/44 (66 %) | 1219 / 4382 ms | **151 ms** | 178 tok/s | 139 | 1 | 82–133 | 2/2 |
+| lfm2.5-1.2b-instruct | off (non-reasoning) | 0.1 | 18/44 (41 %) | 622 / 822 ms | 164 ms | 341 tok/s | 52 | 1 | 23–56 | 0/2 |
+
+¹ qwen3 did "Open YouTube and search for lo-fi beats" as a single `web_search(engine=youtube)` — correct, just not the two calls
+the strict judge first expected.
+
+What the failures look like (this is why "a little worse" does not describe them):
+- **Bluffing.** LFM 8B-A1B answered "Done, sir." to *Mute the speakers*, *Pause the music*, *Switch to Discord*, *Minimise
+  everything* … with **no tool call** (7 of 44). The 2.6B did it 4 times with thinking on, and on both 2-step commands.
+- **Wrong arguments.** 2.6B (prefill): *Mute* → `set_mute(state="off")`; *Dim the screen a little* → `set_brightness(30)`
+  without reading the current level; *Pause* → `media_control("stop")`; *Press alt F4* → `window_action("close")`.
+- **Confusion.** 1.2B: *Take a screenshot* → `get_volume` + `set_volume`; *What reminders do I have?* → `remember(...)`;
+  *Shut down in 10 minutes* → `cancel_shutdown`.
+- **Persona.** Thinking-suppressed 2.6B wrote 82–133-word essays where the persona asks for two sentences; none of the Liquid
+  models said "sir" reliably (qwen3 does when it fits).
+- **Latency.** The Liquid models *generate* 2–4× faster per token, but the reasoning ones spend 140–390 tokens thinking before
+  the tool call, so the user waits 2–3× longer; and the fast one (1.2B) is wrong 59 % of the time.
+
+The 8B-A1B's 5.37 GB VRAM is also not meaningfully lighter than qwen3:8b's 6.19 GB. Verdict: **keep `qwen3:8b`.**
+
+For fairness: qwen3:8b is not immune to bluffing. In the post-change smoke test (`jarvis chat`) it answered *"remember that my
+test keyword is pelican-7"* with "I have noted that…" **without calling `remember`** (the suite's "Remember that my car is parked
+on level 3" passes every time; the first-person "my test keyword" phrasing did not). Pre-existing behaviour, not caused by this
+change (the request body is byte-identical) — a persona nudge ("when asked to remember something, always call `remember`") is the
+likely fix and is left for you to decide.
+
+### 10.3 Ears — Whisper large-v3-turbo vs Parakeet-TDT-0.6B-v3
+
+Test set (737 clips, 46 min, built by `jarvis_stt_testset.py` in `%TEMP%\jarvis_stt_set`):
+- **libri** — 73 real human utterances (LibriSpeech dev-clean sample, 16 kHz read speech) with reference transcripts;
+- **cmd** — 44 Jarvis commands ("Hey Jarvis, set the volume to forty percent", "… open VS Code", hot-window follow-ups like
+  "Yes." / "Make it louder.") × 5 Kokoro voices (am_adam, af_heart, bm_george, bf_emma, am_michael at 1.3× speed), with the
+  0.3/0.4 s of silence the VAD leaves around speech;
+- **cmd_n10 / cmd_n5** — the same 220 commands under pink noise at 10 dB and 5 dB SNR (fan / loud room);
+- **probe** — 1 s silence, 2 s pink noise, a click train, a breath-like burst: should transcribe to *nothing*.
+
+Whisper ran through the production `FasterWhisperSTT.transcribe()` (so with its no-speech gate and `sanitize()`); Parakeet
+through `onnx-asr` with the same `sanitize()` applied. WER uses Whisper's English normaliser (so "forty percent" = "40%").
+"Command keyword kept" checks the word(s) the tool call actually depends on (app name, number, "mute", "cancel", …).
+
+| | **Whisper turbo (current)** | Parakeet v3 fp32 (GPU) | Parakeet v3 int8 (CPU ops) |
+|---|---|---|---|
+| WER libri (real speech) | **3.5 %** | **3.5 %** | 4.6 % |
+| WER commands, clean | **1.7 %** | 2.3 % | 4.8 % |
+| WER commands, 10 dB noise | **5.1 %** | 11.2 % | 12.2 % |
+| WER commands, 5 dB noise | **9.1 %** | 19.2 % | 23.4 % |
+| Command keyword kept — clean | 218/220 (99 %) | **219/220 (100 %)** | 217/220 |
+| Command keyword kept — 10 dB | **212/220 (96 %)** | 204/220 (93 %) | 205/220 |
+| Command keyword kept — 5 dB | **205/220 (93 %)** | 196/220 (89 %) | 185/220 (84 %) |
+| Non-speech probes that produced text | 4/4 ✗ ("Closed Captioning by…", "I'll see you next time", …) | **1/4** ("Yeah.") | 1/4 |
+| Non-English output on English audio | **0** | 3 ("Yes." → "Я жду.", "Яс.") | — |
+| Latency per command (p50 / p90) | 152 / 169 ms | **60 / 65 ms** | 223 / 260 ms |
+| Latency, 5–20 s clips (p50 / p90) | 170 / 233 ms | **69 / 91 ms** | 285 / 488 ms |
+| Model load | 6.4 s | 4.0 s | 2.6 s |
+| VRAM | **1.23 GB** | 3.6 GB | 0.42 GB |
+| Disk | **1.55 GB** | 2.43 GB (+ 0.33 GB onnxruntime-gpu) | 0.64 GB (+ 0.33 GB) |
+| Vocabulary biasing (`initial_prompt`: "Spotify, Interstellar, …") | yes | no (architecture has no prompt) | no |
+| Your own voice / accent | in daily use | **untested** — Parakeet v3 is trained on European languages only; Whisper on 680k h multilingual | |
+
+Per-voice clean WER was within 1 % of each other for every voice (0.5–3.2 % Whisper, 1.1–4.3 % Parakeet); both engines made
+the same two real mistakes on the fast am_michael voice ("thinks that is all", "type a low world").
+
+Reading: on clean speech they are the same. Parakeet is genuinely faster (saves ~90 ms of a ~1.5 s voice turn) and much
+better behaved on non-speech. But in noise its word error rate roughly **doubles**, the Cyrillic "Yes." is a real hazard for
+one-word confirmations in the hot window, it cannot be primed with your app/film names, and — decisive for your premise — the
+GPU build needs **3× the VRAM and 1.6× the disk** of Whisper turbo. The small int8 build is lighter but slower *and* worse.
+Verdict: **keep Whisper turbo.** Two things learned that are worth doing anyway (not done, your call): tighten Whisper's
+no-speech gate (it let all four probes through — the Silero VAD in front of it is what saves us in practice), and if you want
+to try Parakeet on *your* voice, the throwaway venv and model are still in `%TEMP%` (§10.6).
+
+### 10.4 Eyes — Qwen2.5-VL-7B vs LFM2.5-VL-3B
+
+Method (`jarvis_vision_bench2.py`): ten synthetic Windows screens with known content (Premiere error dialog with code
+`0x8007000E`, Spotify "Blinding Lights", Explorer with five file names, BBC headline, VS Code traceback at line 42, Settings
+toggles, Outlook mail, Discord chat, npm ERESOLVE terminal, Spotify + Chrome side by side) and one real capture. Same system
+prompt, 300-token cap, T 0.2 and 1280-px JPEG as `describe_screen`. Pass = every ground-truth keyword present. Two rounds:
+**standard** (1920×1080 render, 18–22 px text) and **dense** (text scaled to the size it really has after your
+2880×1800 @ 175 % screen is shrunk to 1280 px — about 9–11 px). Each case asked twice.
+
+| | **qwen2.5vl:7b** (current) | LFM2.5-VL-3B @ 1280 px | LFM2.5-VL-3B @ 1920 px | LFM2.5-VL-3B @ 2880 px |
+|---|---|---|---|---|
+| Standard round | 18/20 | **20/20** | — | — |
+| **Dense round (realistic)** | **18/20** | 12/20 | 15/20 | 17/20 |
+| Image tokens | 1261 | 835 | 2377 | 2377 (capped) |
+| Prompt eval, new image | 0.8–0.9 s | 0.3 s | 0.8 s | 0.8 s |
+| Warm answer p50 / p90 | 0.9 / 1.4 s | 0.5 / 0.8 s | 0.5 / 1.2 s | 0.5 / 1.2 s |
+| VRAM | 5.87 GB | 3.2 GB | 3.2 GB | 3.2 GB |
+| Load from disk cache | 3–5 s | 2.7–3.8 s | | |
+
+Qwen's two misses are the same case twice: it said the ZeroDivisionError is "on line 44" (the call site shown in the
+traceback; line 42 is the division) — defensible. LFM's dense-round misses are confident misreads: error code **`D800700E`**,
+files "Investor_March_2026.pdf" / "tres_final_v1.docx", **"Bluetooth is on"** when the toggle was off, and attributing another
+user's message to Rohan. At 1920 px it recovers most of the text but then costs the same prompt-eval time as Qwen, still
+misattributes the chat message in some runs, and misses the dependency name in the npm error. Both models called the real
+capture "Visual Studio Code"-like with the right tab title (no "Cursor" text was visible; not scored).
+
+The genuinely attractive property of the 3B is VRAM: measured with `qwen3:8b` resident, it loaded **beside** it (both 100 %
+GPU) and answered in **0.2 s warm**, versus Qwen2.5-VL's production path of unload chat → describe → re-warm chat (**4.9 s to
+the answer, chat back after 8.3 s**; LFM through the same swap path: 3.9 s / 5.7 s). But the full stack already holds
+qwen3:8b + Whisper + Kokoro + the HUD's Chromium at ~8.4 of 12.2 GB; adding 3.2 GB leaves ~0.6 GB, and when Ollama's
+scheduler judges the margin too small it offloads layers to the CPU, which is the 65-second failure mode fixed in Phase 3.
+Not worth a 10–30-point accuracy drop on the thing you'd use it for (reading an error). Verdict: **keep `qwen2.5vl:7b`.**
+
+### 10.5 What changed in the code (small, default-off)
+
+To test the reasoning models fairly, Jarvis needed per-model control over Ollama's thinking flag and temperature:
+
+- `config.py`: `ModelOpts(think: off | on | prefill, temperature)` and `llm.model_opts: {model-string: ModelOpts}`;
+  `LLMCfg.opts_for(model)` matches the exact string, then a prefix (so `ollama/lfm2.5` covers every tag).
+- `llm/router.py`: `stream()` applies `opts_for(model)`; `prefill` appends an assistant message `<think>\n\n</think>` that
+  Ollama continues (so the model skips its reasoning); `on` omits the `think` flag so Ollama returns the chain of thought in
+  the separate `thinking` field, which Jarvis ignores.
+- `llm/ollama.py`: `chat_stream(think: bool | None)` — `None` omits the key.
+
+With no `model_opts` in `settings.yaml` the request body is byte-identical to before (`think: false`), and the qwen3:8b baseline
+above (44/44) ran through the new path. If you ever want to try a Liquid model anyway:
+
+```yaml
+llm:
+  primary: ollama/LiquidAI/lfm2.5-2.6b
+  model_opts:
+    ollama/LiquidAI/lfm2.5-2.6b: { think: prefill, temperature: 0.1 }   # or think: on for better tool accuracy, slower
+    ollama/lfm2.5: { think: on, temperature: 0.2 }                      # 8B-A1B: prefill breaks its tool calling
+  # vision: ollama/hf.co/LiquidAI/LFM2.5-VL-3B-GGUF:Q8_0   # and raise VISION_MAX_W in tools/screen.py to 1920
+```
+
+Parakeet was **not** wired into `stt/` (it would have needed `stt/parakeet.py`, an `onnx-asr` + `onnxruntime-gpu<1.27`
+dependency swap, and a `doctor` check); the throwaway venv in `%TEMP%` is the complete, working recipe if you change your mind.
+
+### 10.6 What you can delete / what to change
+
+Nothing in the repo or in `config/settings.yaml` needs changing — the defaults are what won. Disk that can go (**I have not
+deleted anything**; copy-paste when you are sure):
+
+| What | Size | Why it is safe | Command |
+|---|---|---|---|
+| Ollama `qwen3:14b` | 9.3 GB | Not used since D2 (default is 8b); re-pull any time | `ollama rm qwen3:14b` |
+| Ollama `lfm2.5:8b` | 5.2 GB | Evaluated, rejected | `ollama rm lfm2.5:8b` |
+| Ollama `hf.co/LiquidAI/LFM2.5-VL-3B-GGUF:Q8_0` | 3.5 GB | Evaluated, rejected (opt-in recipe in §10.5) | `ollama rm hf.co/LiquidAI/LFM2.5-VL-3B-GGUF:Q8_0` |
+| Ollama `LiquidAI/lfm2.5-2.6b` | 1.7 GB | Evaluated, rejected | `ollama rm LiquidAI/lfm2.5-2.6b` |
+| Ollama `LiquidAI/lfm2.5-1.2b-instruct` | 0.7 GB | Evaluated, rejected | `ollama rm LiquidAI/lfm2.5-1.2b-instruct` |
+| `%TEMP%\jarvis_parakeet_model` + `%TEMP%\jarvis_parakeet_venv` | 3.1 + 0.5 GB | Parakeet model + its isolated venv (keep if you want to try it on your own voice) | `Remove-Item -Recurse -Force $env:TEMP\jarvis_parakeet_model, $env:TEMP\jarvis_parakeet_venv` |
+| `%USERPROFILE%\.cache\huggingface\hub\blobs` + `…\models--istupakov--parakeet-tdt-0.6b-v3-onnx` | 2.4 GB | Duplicate of the Parakeet download from the first (failed) load attempt — the new shared-blob layout that onnxruntime rejects | `Remove-Item -Recurse -Force $env:USERPROFILE\.cache\huggingface\hub\blobs, $env:USERPROFILE\.cache\huggingface\hub\models--istupakov--parakeet-tdt-0.6b-v3-onnx` |
+| `%TEMP%\jarvis_stt_set`, `jarvis_vision_set`, `jarvis_llm_bench`, `jarvis_*.py` | ~0.1 GB | Test audio, screenshots, result JSON and scripts | `Remove-Item -Recurse -Force $env:TEMP\jarvis_stt_set, $env:TEMP\jarvis_vision_set, $env:TEMP\jarvis_llm_bench; Remove-Item $env:TEMP\jarvis_*.py` |
+
+Keep: `qwen3:8b`, `qwen2.5vl:7b`, the Whisper and Kokoro caches, `~/.cache/huggingface/hub/datasets--hf-internal-testing--librispeech_asr_dummy`
+(9 MB, harmless). Total reclaimable: **~26 GB** (≈ 20 GB from Ollama alone).
+
+---
+
+## 11. Tuning cheat-sheet (`config/settings.yaml`)
 
 | Want to… | Change |
 |---|---|
 | Use Claude / GPT / Gemini / Groq | put the key in `.env`, set `llm.primary: anthropic/claude-sonnet-4-5` (any LiteLLM string) |
 | Smarter local model | `llm.primary: ollama/qwen3:14b` (slower, 10 GB VRAM) |
+| Try a reasoning model that ignores `think: false` (LFM2.5, DeepSeek-R1…) | `llm.model_opts: { ollama/<model>: { think: on \| prefill, temperature: 0.1 } }` — see §10.5 |
 | Different voice | `tts.voice: bm_lewis` (or `bm_daniel`, `bm_fable`, American `am_adam`, `af_heart`); `tts.speed: 1.1` |
 | Jarvis misses / over-triggers the wake word | `assistant.wake_threshold: 0.4` / `0.6` |
 | Longer / shorter follow-up window | `assistant.hot_window_seconds` |
@@ -527,9 +710,10 @@ process removes both at once → **10.6 s with the window visible** (and 11.2 s 
 
 ---
 
-## 11. Git history
+## 12. Git history
 
 ```
+fc6b5f3  STATUS: record Phase 5 commit hash
 18e257c  Phase 5: conversation persistence, autostart, two-process launcher (D18), pythonw fixes, docs
 9be730b  Phase 4: WebSocket hub + FastAPI, Three.js HUD, PySide6 overlay, vision_swap, docs
 d09ed55  Phase 3: full PC control, memory, reminders, vision

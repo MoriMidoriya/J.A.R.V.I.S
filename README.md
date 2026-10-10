@@ -122,7 +122,11 @@ ring), racing rings while thinking, amber card with **Confirm / Cancel** when a 
 
 Everything lives in `config/settings.yaml` (model, voice, wake sensitivity, hot window, devices…) and
 `config/permissions.yaml` (what needs confirmation, which folders are reachable). Persona text is `config/persona.md`.
-See the tuning cheat-sheet in [`STATUS.md`](STATUS.md#10-tuning-cheat-sheet-configsettingsyaml).
+See the tuning cheat-sheet in [`STATUS.md`](STATUS.md#11-tuning-cheat-sheet-configsettingsyaml).
+
+Why these models: Qwen3-8B, Whisper large-v3-turbo and Qwen2.5-VL-7B were benchmarked against the smaller Liquid LFM2.5 family
+and NVIDIA Parakeet on this machine (tool-calling suite, 737-clip speech set, ground-truth screenshots) and kept — the numbers
+and the opt-in recipes are in [`STATUS.md` §10](STATUS.md#10-lighter-model-evaluation--liquid-lfm25-and-nvidia-parakeet-2026-10-10).
 
 Switch to a cloud brain:
 

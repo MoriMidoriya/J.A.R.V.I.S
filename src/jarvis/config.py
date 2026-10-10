@@ -32,6 +32,20 @@ class AssistantCfg(BaseModel):
     home_city: str | None = None  # for weather when no city is named; null = locate by IP
 
 
+class ModelOpts(BaseModel):
+    """Per-model overrides (keyed by the model string in `llm.model_opts`).
+
+    think:  off     = ask Ollama to disable chain-of-thought (Qwen3 & co. honour `think: false`)
+            on      = let the model think; Ollama separates it into the `thinking` field, which Jarvis ignores
+                      (models that always reason, e.g. LFM2.5-8B-A1B — `think: false` would leak `<think>` text)
+            prefill = start the assistant turn with an empty `<think></think>` block so the model skips reasoning
+                      (LFM2.5-2.6B: same quality on tool calls, ~4x fewer tokens per turn)
+    """
+
+    think: Literal["off", "on", "prefill"] = "off"
+    temperature: float | None = None  # overrides llm.temperature for this model (e.g. LFM2.5 recommends 0.1-0.2)
+
+
 class LLMCfg(BaseModel):
     primary: str = "ollama/qwen3:8b"
     fast: str | None = "ollama/qwen3:8b"
@@ -44,6 +58,16 @@ class LLMCfg(BaseModel):
     ollama_num_ctx: int = 8192
     ollama_keep_alive: str = "30m"
     max_tool_rounds: int = 6
+    model_opts: dict[str, ModelOpts] = Field(default_factory=dict)
+
+    def opts_for(self, model: str) -> ModelOpts:
+        """Exact key first, then a key that is a prefix of the model string (so `ollama/lfm2.5` covers all tags)."""
+        if model in self.model_opts:
+            return self.model_opts[model]
+        for key, opts in self.model_opts.items():
+            if model.startswith(key):
+                return opts
+        return ModelOpts()
 
 
 class STTCfg(BaseModel):

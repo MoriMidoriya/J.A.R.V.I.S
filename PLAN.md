@@ -473,6 +473,10 @@ Total to a polished v1 (Phases 0–5): roughly 7–10 focused build days.
 4. **Voice:** Kokoro British male (local, free); ElevenLabs/OpenAI TTS optional via key.
 5. **Shell access:** `run_powershell` enabled behind mandatory confirmation.
 6. **Address:** "sir".
+7. **Lighter models evaluated and rejected (2026-10-10):** Liquid LFM2.5 (8B-A1B, 2.6B, 1.2B, VL-3B) and NVIDIA
+   Parakeet-TDT-0.6B-v3 were benchmarked against Qwen3-8B / Qwen2.5-VL-7B / Whisper turbo on the real stack. None was "the same
+   or just a little worse" (tool-call bluffing, doubled WER in noise, misread error codes), and the Parakeet GPU build is heavier
+   than Whisper turbo. Defaults unchanged; `llm.model_opts` added for reasoning models. Details: STATUS.md D20 and §10.
 
 ---
 

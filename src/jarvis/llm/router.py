@@ -166,17 +166,22 @@ class LLMRouter:
         timeout: float | None = None,
     ) -> LLMResult:
         model = model or self.s.llm.primary
+        opts = self.s.llm.opts_for(model)
+        if temperature is None:
+            temperature = self.s.llm.temperature if opts.temperature is None else opts.temperature
         kw = dict(tools=tools, on_text=on_text, max_tokens=max_tokens or self.s.llm.max_tokens,
-                  temperature=self.s.llm.temperature if temperature is None else temperature,
-                  timeout=timeout or self.s.llm.request_timeout_s)
+                  temperature=temperature, timeout=timeout or self.s.llm.request_timeout_s)
         if self.is_local(model):
-            return await self._stream_ollama(model, messages, **kw)
+            return await self._stream_ollama(model, messages, think=opts.think, **kw)
         return await self._stream_litellm(model, messages, **kw)
 
-    async def _stream_ollama(self, model: str, messages: list[dict[str, Any]], *, tools, on_text, max_tokens, temperature, timeout) -> LLMResult:
+    async def _stream_ollama(self, model: str, messages: list[dict[str, Any]], *, tools, on_text, max_tokens, temperature, timeout, think: str = "off") -> LLMResult:
         t0 = time.perf_counter()
         filt = ThinkFilter()
         clean = ""
+        if think == "prefill" and messages and messages[-1].get("role") != "assistant":
+            # Ollama continues a trailing assistant message, so an empty think block makes the model answer directly.
+            messages = [*messages, {"role": "assistant", "content": "<think>\n\n</think>\n"}]
 
         async def push(s: str) -> None:
             nonlocal clean
@@ -194,6 +199,7 @@ class LLMRouter:
         raw_text, raw_calls, stats, first = await self.ollama.chat_stream(
             model.split("/", 1)[1], messages, tools=tools or None, on_text=on_delta,
             temperature=temperature, max_tokens=max_tokens, timeout=timeout,
+            think=None if think == "on" else False,
         )
         await push(filt.flush())
         tool_calls = [

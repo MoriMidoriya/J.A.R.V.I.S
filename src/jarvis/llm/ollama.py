@@ -107,17 +107,22 @@ class OllamaClient:
         temperature: float = 0.6,
         max_tokens: int = 400,
         timeout: float = 60.0,
-        think: bool = False,
+        think: bool | None = False,
     ) -> tuple[str, list[dict[str, Any]], OllamaStats, int | None]:
-        """Returns (text, raw tool_calls, stats, first_token_ms). `on_text` receives text deltas as they stream."""
+        """Returns (text, raw tool_calls, stats, first_token_ms). `on_text` receives text deltas as they stream.
+
+        `think=None` omits the flag: reasoning models then think natively and Ollama returns the chain of thought in
+        `message.thinking`, which we ignore — only `content` and `tool_calls` reach the caller.
+        """
         body: dict[str, Any] = {
             "model": model,
             "messages": to_ollama_messages(messages),
             "stream": True,
-            "think": think,
             "keep_alive": self.keep_alive,
             "options": {"num_ctx": self.num_ctx, "temperature": temperature, "num_predict": max_tokens},
         }
+        if think is not None:
+            body["think"] = think
         if tools:
             body["tools"] = tools
         t0 = time.perf_counter()
