@@ -716,13 +716,18 @@ the one remaining big saving, your call).
 
 ## 12. Git history
 
+Hashes as on GitHub after you rewrote the Phase 2–5 messages on 2026-10-10 (content unchanged; the local commits were
+rebased onto that history, so earlier hashes quoted in this file's history are superseded by these):
+
 ```
-18ebba9  Model evaluation: Liquid LFM2.5 vs Qwen, Parakeet vs Whisper — kept current models (D20); llm.model_opts; docs
-fc6b5f3  STATUS: record Phase 5 commit hash
-18e257c  Phase 5: conversation persistence, autostart, two-process launcher (D18), pythonw fixes, docs
-9be730b  Phase 4: WebSocket hub + FastAPI, Three.js HUD, PySide6 overlay, vision_swap, docs
-d09ed55  Phase 3: full PC control, memory, reminders, vision
-a4a2600  Phase 2 complete: native Ollama client, voice fixes, boot order, docs
+f94bfa0  Cleanup after model evaluation: removed Liquid/Parakeet models, test artefacts and scripts (16.2 GB); docs
+6d74444  STATUS: record evaluation commit hash
+0279332  Model evaluation: Liquid LFM2.5 vs Qwen, Parakeet vs Whisper — kept current models (D20); llm.model_opts; docs
+a7f53cc  STATUS: record Phase 5 commit hash
+50cb106  Phase 5: conversation persistence, autostart, two-process launcher (D18), pythonw fixes, docs
+e539795  Phase 4: WebSocket hub + FastAPI, Three.js HUD, PySide6 overlay, vision_swap, docs
+16e6f26  Phase 3: full PC control, memory, reminders, vision
+b783525  Phase 2 complete: native Ollama client, voice fixes, boot order, docs
 f0b0d5b  (your commit, titled "Phase 0 and partial Phase 1") — actually Phase 2 voice code + STATUS.md
 90b4cc6  Phase 1: LiteLLM router, agent loop, tool registry, apps/files/browser/system tools, chat REPL
 272277b  Phase 0: plan, environment, config, doctor
