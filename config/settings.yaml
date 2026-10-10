@@ -29,6 +29,7 @@ llm:
   max_tool_rounds: 6
   # Per-model overrides, keyed by model string (exact or prefix). Only needed for reasoning models that ignore `think: false`:
   #   think: off (default, Qwen3) | on (model thinks; Ollama keeps it out of the reply) | prefill (skip thinking via an empty <think> block)
+  # Example (that model is NOT installed any more — `ollama pull LiquidAI/lfm2.5-2.6b` first; see STATUS.md §10.5):
   # model_opts:
   #   ollama/LiquidAI/lfm2.5-2.6b: { think: prefill, temperature: 0.1 }
 

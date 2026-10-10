@@ -37,9 +37,9 @@ First time only: `cd hud; npm install; npm run build` (the HUD is a Vite build; 
 
 **Open for your decision (nothing blocks on these):** (1) run `jarvis autostart on` if you want him at sign-in — I left it
 OFF; (2) `memory.resume_hours: 6` is how long a conversation survives a restart — raise/lower to taste; (3) voice is still
-`bm_george`; try `uv run jarvis say "..."` after editing `tts.voice` (bm_lewis, bf_emma, am_michael, …); (4) **~20 GB of disk
-can be freed** after the model evaluation — the unused `qwen3:14b` and the four Liquid models in Ollama plus my test artefacts
-in `%TEMP%` — see §10.6 for the exact commands. Nothing is deleted until you say so.
+`bm_george`; try `uv run jarvis say "..."` after editing `tts.voice` (bm_lewis, bf_emma, am_michael, …); (4) `qwen3:14b`
+(9.3 GB) is still in Ollama but unused since D2 — `ollama rm qwen3:14b` if you want the space (the evaluation's own 16 GB was
+cleaned up on request, §10.6).
 
 ---
 
@@ -649,7 +649,8 @@ To test the reasoning models fairly, Jarvis needed per-model control over Ollama
 - `llm/ollama.py`: `chat_stream(think: bool | None)` — `None` omits the key.
 
 With no `model_opts` in `settings.yaml` the request body is byte-identical to before (`think: false`), and the qwen3:8b baseline
-above (44/44) ran through the new path. If you ever want to try a Liquid model anyway:
+above (44/44) ran through the new path. The feature does not depend on any particular model being installed (the Liquid models
+were removed again, §10.6). If you ever want to try one anyway, `ollama pull` it first, then:
 
 ```yaml
 llm:
@@ -661,26 +662,29 @@ llm:
 ```
 
 Parakeet was **not** wired into `stt/` (it would have needed `stt/parakeet.py`, an `onnx-asr` + `onnxruntime-gpu<1.27`
-dependency swap, and a `doctor` check); the throwaway venv in `%TEMP%` is the complete, working recipe if you change your mind.
+dependency swap, and a `doctor` check). The recipe that worked, should you want to try it on your own voice one day:
+`uv venv <dir> --python 3.12`, `uv pip install "onnx-asr[hub]" "onnxruntime-gpu<1.27" soundfile`, download
+`istupakov/parakeet-tdt-0.6b-v3-onnx` with `snapshot_download(local_dir=...)`, then `os.add_dll_directory(<.venv>/Lib/site-packages/torch/lib)`
++ `onnxruntime.preload_dlls(directory=that)` before `onnx_asr.load_model("nemo-parakeet-tdt-0.6b-v3", path=local_dir, providers=["CUDAExecutionProvider"])`;
+expect a one-off ~48 s first inference while the driver JIT-compiles.
 
-### 10.6 What you can delete / what to change
+### 10.6 Cleanup (done 2026-10-10 12:16, on your request)
 
-Nothing in the repo or in `config/settings.yaml` needs changing — the defaults are what won. Disk that can go (**I have not
-deleted anything**; copy-paste when you are sure):
+Nothing in the repo or in `config/settings.yaml` needed changing — the defaults are what won. Everything the evaluation
+had added was removed again; the project was re-verified afterwards (`jarvis doctor` all OK, main venv imports fine):
 
-| What | Size | Why it is safe | Command |
-|---|---|---|---|
-| Ollama `qwen3:14b` | 9.3 GB | Not used since D2 (default is 8b); re-pull any time | `ollama rm qwen3:14b` |
-| Ollama `lfm2.5:8b` | 5.2 GB | Evaluated, rejected | `ollama rm lfm2.5:8b` |
-| Ollama `hf.co/LiquidAI/LFM2.5-VL-3B-GGUF:Q8_0` | 3.5 GB | Evaluated, rejected (opt-in recipe in §10.5) | `ollama rm hf.co/LiquidAI/LFM2.5-VL-3B-GGUF:Q8_0` |
-| Ollama `LiquidAI/lfm2.5-2.6b` | 1.7 GB | Evaluated, rejected | `ollama rm LiquidAI/lfm2.5-2.6b` |
-| Ollama `LiquidAI/lfm2.5-1.2b-instruct` | 0.7 GB | Evaluated, rejected | `ollama rm LiquidAI/lfm2.5-1.2b-instruct` |
-| `%TEMP%\jarvis_parakeet_model` + `%TEMP%\jarvis_parakeet_venv` | 3.1 + 0.5 GB | Parakeet model + its isolated venv (keep if you want to try it on your own voice) | `Remove-Item -Recurse -Force $env:TEMP\jarvis_parakeet_model, $env:TEMP\jarvis_parakeet_venv` |
-| `%USERPROFILE%\.cache\huggingface\hub\blobs` + `…\models--istupakov--parakeet-tdt-0.6b-v3-onnx` | 2.4 GB | Duplicate of the Parakeet download from the first (failed) load attempt — the new shared-blob layout that onnxruntime rejects | `Remove-Item -Recurse -Force $env:USERPROFILE\.cache\huggingface\hub\blobs, $env:USERPROFILE\.cache\huggingface\hub\models--istupakov--parakeet-tdt-0.6b-v3-onnx` |
-| `%TEMP%\jarvis_stt_set`, `jarvis_vision_set`, `jarvis_llm_bench`, `jarvis_*.py` | ~0.1 GB | Test audio, screenshots, result JSON and scripts | `Remove-Item -Recurse -Force $env:TEMP\jarvis_stt_set, $env:TEMP\jarvis_vision_set, $env:TEMP\jarvis_llm_bench; Remove-Item $env:TEMP\jarvis_*.py` |
+| Removed | Size |
+|---|---|
+| Ollama `lfm2.5:8b`, `LiquidAI/lfm2.5-2.6b`, `LiquidAI/lfm2.5-1.2b-instruct`, `hf.co/LiquidAI/LFM2.5-VL-3B-GGUF:Q8_0` | 10.3 GB (`~/.ollama/models` 29.3 → 19.1 GB) |
+| Parakeet model dir + its throwaway venv (`%TEMP%\jarvis_parakeet_*`), 46-min STT test set, vision screenshots, benchmark JSON/scratch DB | 3.6 GB |
+| Hugging Face cache: shared-blob copy of Parakeet (`hub/blobs`, `models--istupakov--…`) + LibriSpeech sample dataset | 2.4 GB |
+| uv cache entries for `onnxruntime-gpu`, `onnx-asr`, `jiwer`, `pyarrow` | 0.4 GB |
+| Test scripts tied to those models (`jarvis_llm_bench.py`, `jarvis_lfm_*.py`, `jarvis_parakeet_probe.py`, `jarvis_stt_*.py`, `jarvis_vision_bench2.py`, `jarvis_libri_extract.py`) | — |
+| **Total** | **16.2 GB** (C: free 528.9 → 545.1 GB) |
 
-Keep: `qwen3:8b`, `qwen2.5vl:7b`, the Whisper and Kokoro caches, `~/.cache/huggingface/hub/datasets--hf-internal-testing--librispeech_asr_dummy`
-(9 MB, harmless). Total reclaimable: **~26 GB** (≈ 20 GB from Ollama alone).
+Kept: `qwen3:8b`, `qwen2.5vl:7b`, the Whisper and Kokoro caches, the generic `llm.model_opts` code (§10.5 — works without
+those models, default-off), and `qwen3:14b` (9.3 GB, not part of the evaluation; unused since D2 — `ollama rm qwen3:14b` is
+the one remaining big saving, your call).
 
 ---
 
