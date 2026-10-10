@@ -2,8 +2,6 @@
 
 Voice-first, local-first AI assistant for Windows with full PC control and an Iron Man style HUD that pulses with his voice.
 
-- **Design:** [`PLAN.md`](PLAN.md)
-- **Build log, measurements, decisions, tuning:** [`STATUS.md`](STATUS.md)
 
 > "Hey Jarvis, daddy's home." → *"Good evening, sir. Welcome home. What can I do for you?"*
 
@@ -136,11 +134,9 @@ Everything lives in `config/settings.yaml` (model, voice, wake sensitivity, hot 
 `config/permissions.yaml` (what needs confirmation, which folders are reachable). Persona text is `config/persona.md`.
 HUD looks (corner, size, brightness, instruments…) are easier from the HUD's own settings drawer; those are saved to
 `data/ui.json` and override the `ui:` defaults in the yaml.
-See the tuning cheat-sheet in [`STATUS.md`](STATUS.md#11-tuning-cheat-sheet-configsettingsyaml).
 
 Why these models: Qwen3-8B, Whisper large-v3-turbo and Qwen2.5-VL-7B were benchmarked against the smaller Liquid LFM2.5 family
-and NVIDIA Parakeet on this machine (tool-calling suite, 737-clip speech set, ground-truth screenshots) and kept — the numbers
-and the opt-in recipes are in [`STATUS.md` §10](STATUS.md#10-lighter-model-evaluation--liquid-lfm25-and-nvidia-parakeet-2026-10-10).
+and NVIDIA Parakeet on this machine (tool-calling suite, 737-clip speech set, ground-truth screenshots) and kept.
 
 Switch to a cloud brain:
 
