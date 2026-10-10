@@ -805,7 +805,7 @@ Hashes as on GitHub after you rewrote the Phase 2–5 messages on 2026-10-10 (co
 rebased onto that history, so earlier hashes quoted in this file's history are superseded by these):
 
 ```
-(next)   Phase 6: HUD overhaul — spectrum-driven instrument-ring reactor, side instruments, compact attention behaviour, ui prefs
+2aa03cb  Phase 6: HUD overhaul — spectrum-driven instrument-ring reactor, side instruments, compact attention behaviour, ui prefs
 0e44ea8  STATUS: update git history hashes after message rewrite + rebase
 f94bfa0  Cleanup after model evaluation: removed Liquid/Parakeet models, test artefacts and scripts (16.2 GB); docs
 6d74444  STATUS: record evaluation commit hash
