@@ -93,6 +93,29 @@ def autostart(
 
 
 @app.command()
+def shortcut(
+    action: str = typer.Argument("create", help="create | remove | status"),
+    desktop: bool = typer.Option(False, "--desktop", help="Also (or only, with `remove`) the Desktop shortcut; default is the Start Menu"),
+    mode: str | None = typer.Option(None, "--mode", help="HUD mode to start in (compact | panel | cinematic)"),
+) -> None:
+    """Start Menu (and optionally Desktop) shortcut that starts J.A.R.V.I.S. without a terminal — search "JARVIS" in the Start Menu."""
+    from jarvis.ui import shortcuts as sc
+
+    targets = [sc.start_menu_shortcut()] + ([sc.desktop_shortcut()] if desktop else [])
+    if action == "create":
+        for lnk in targets:
+            sc.create_shortcut(lnk, mode)
+            typer.echo(f"Created {lnk}")
+        typer.echo("Jarvis starts with no console window; the tray icon is the UI (quit from there, or say “power down”).")
+    elif action == "remove":
+        for lnk in targets:
+            typer.echo(f"Removed {lnk}" if sc.remove_shortcut(lnk) else f"No shortcut at {lnk}")
+    else:
+        for lnk in [sc.start_menu_shortcut(), sc.desktop_shortcut()]:
+            typer.echo(sc.describe_shortcut(lnk))
+
+
+@app.command()
 def say(text: str) -> None:
     """Speak a line with the configured TTS voice (for testing voices)."""
     from jarvis.tts import speak_blocking

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -95,6 +96,10 @@ class AudioCfg(BaseModel):
     max_utterance_s: float = 15
 
 
+Corner = Literal["bottom-right", "bottom-left", "top-right", "top-left"]
+TILES = ("wave", "spectrum", "system", "radar", "clock", "globe", "pipeline")  # side instruments, see hud/src/widgets.ts
+
+
 class UICfg(BaseModel):
     enabled: bool = True
     mode: Literal["compact", "panel", "cinematic"] = "compact"
@@ -103,12 +108,59 @@ class UICfg(BaseModel):
     hotkey_text_input: str = "<ctrl>+<shift>+j"
     hotkey_toggle_hud: str = "<ctrl>+<shift>+h"
     start_with_windows: bool = False
+    # ---- user preferences (editable from the HUD's settings drawer; persisted in data/ui.json, which overrides the
+    # values below — see load_ui_prefs / save_ui_prefs) -------------------------------------------------------------
     # Attention behaviour (compact mode): the reactor sits dimmed in the corner; "Hey Jarvis" brings it to full
     # brightness and unfolds the last lines of conversation next to it; `linger_s` after the turn it folds and dims again.
+    corner: Corner = "bottom-right"  # where the compact reactor (and the panel) dock
     idle_opacity: float = Field(0.55, ge=0.1, le=1.0)
     linger_s: float = Field(8.0, ge=0.0, le=120.0)
-    widgets: bool = True  # side instruments (audio in/out, spectrum, system, clock) in panel/cinematic modes
+    reactor_size: int = Field(300, ge=200, le=400)  # px, compact mode
+    show_convo: bool = True  # unfold the last lines of conversation beside the reactor while engaged
+    show_status: bool = True  # the STANDBY / LISTENING word under the reactor
+    auto_hide: bool = False  # hide the window completely while resting; it reappears on "Hey Jarvis" / activity
+    widgets: bool = True  # master switch for the side instruments in panel/cinematic modes
+    tiles: dict[str, bool] = Field(default_factory=lambda: dict.fromkeys(TILES, True))  # per-instrument switches
     cinematic_dim: float = Field(0.45, ge=0.0, le=0.9)  # how much the full-screen mode darkens the desktop behind it
+    scanlines: bool = True  # cinematic mode only
+
+
+# Keys of UICfg that the HUD may change at runtime and that are persisted to data/ui.json.
+UI_PREF_KEYS = ("corner", "idle_opacity", "linger_s", "reactor_size", "show_convo", "show_status", "auto_hide", "widgets", "tiles", "cinematic_dim", "scanlines")
+UI_PREFS_PATH = DATA_DIR / "ui.json"
+
+
+def ui_prefs(ui: UICfg) -> dict[str, Any]:
+    """The user-editable subset of the UI config, as sent to the HUD (`hello.ui`, `ui.prefs`)."""
+    d = ui.model_dump(mode="json")
+    return {k: d[k] for k in UI_PREF_KEYS}
+
+
+def load_ui_prefs() -> dict[str, Any]:
+    """Overrides saved from the HUD's settings drawer (unknown keys ignored; a corrupt file is ignored, not fatal)."""
+    try:
+        data = json.loads(UI_PREFS_PATH.read_text(encoding="utf-8")) if UI_PREFS_PATH.exists() else {}
+    except (OSError, ValueError):
+        return {}
+    return {k: v for k, v in data.items() if k in UI_PREF_KEYS} if isinstance(data, dict) else {}
+
+
+def save_ui_prefs(ui: UICfg) -> None:
+    UI_PREFS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    UI_PREFS_PATH.write_text(json.dumps(ui_prefs(ui), indent=2), encoding="utf-8")
+
+
+def update_ui_prefs(ui: UICfg, patch: dict[str, Any]) -> UICfg:
+    """Validated merge of a (partial) prefs patch; `tiles` merges per key. Raises pydantic.ValidationError on bad values."""
+    data = ui.model_dump()
+    for k, v in patch.items():
+        if k not in UI_PREF_KEYS:
+            continue
+        if k == "tiles" and isinstance(v, dict):
+            data["tiles"] = {**data["tiles"], **{t: bool(on) for t, on in v.items() if t in TILES}}
+        else:
+            data[k] = v
+    return UICfg.model_validate(data)
 
 
 class ToolsCfg(BaseModel):
@@ -184,6 +236,14 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 def get_settings() -> Settings:
     data = _load_yaml(CONFIG_DIR / "settings.yaml")
     data["permissions"] = _load_yaml(CONFIG_DIR / "permissions.yaml")
+    # Preferences changed from the HUD's settings drawer win over settings.yaml (both the window process and the
+    # backend read this, so they agree on e.g. the corner at start-up).
+    overrides = load_ui_prefs()
+    if overrides:
+        ui = data.get("ui") or {}
+        if "tiles" in overrides and isinstance(ui.get("tiles"), dict):
+            overrides["tiles"] = {**ui["tiles"], **overrides["tiles"]}
+        data["ui"] = {**ui, **overrides}
     # BaseSettings merges env overrides on top of init kwargs.
     return Settings(**data)
 

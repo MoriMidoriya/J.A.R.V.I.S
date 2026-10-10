@@ -115,7 +115,9 @@ export class Instruments {
     }
     for (const it of this.items) {
       const { sf } = it;
-      if (sf.w < 8 || sf.h < 8) continue;
+      // too small to be a real tile (the first frame can see a stale size from before the mode class was applied —
+      // ResizeObserver delivers after rAF; the smallest laid-out tile is the panel's 118 px row)
+      if (sf.w < 60 || sf.h < 60) continue;
       const ctx = sf.ctx;
       ctx.clearRect(0, 0, sf.w, sf.h);
       ctx.lineWidth = 1;
@@ -262,7 +264,7 @@ export class Instruments {
     const s = this.stats;
     const n = 3;
     const cw = w / n;
-    const r = Math.min(cw / 2 - 16, (h - 52) / 2 - 10, 26);
+    const r = Math.max(2, Math.min(cw / 2 - 16, (h - 52) / 2 - 10, 26));
     const cy = 16 + r + 6;
     const vram = s?.vram_used_gb != null && s.vram_total_gb ? s.vram_used_gb / s.vram_total_gb : null;
     this.gauge(ctx, cw * 0.5, cy, r, s ? s.cpu_pct / 100 : null, "CPU");
@@ -279,7 +281,7 @@ export class Instruments {
   private radar(ctx: CanvasRenderingContext2D, w: number, h: number, t: number): void {
     const cx = w / 2;
     const cy = 14 + (h - 14) / 2;
-    const R = Math.min(w, h - 14) / 2 - 18;
+    const R = Math.max(2, Math.min(w, h - 14) / 2 - 18);
     const s = this.stats;
     const net = s ? Math.min(1, Math.log10(1 + s.net_up_kbps + s.net_down_kbps) / 4) : 0;
     const vram = s?.vram_used_gb != null && s.vram_total_gb ? s.vram_used_gb / s.vram_total_gb : 0;
@@ -342,7 +344,7 @@ export class Instruments {
   private clock(ctx: CanvasRenderingContext2D, w: number, h: number): void {
     const d = new Date();
     const cx = w / 2;
-    const R = Math.min(w / 2, (h - 36) / 2) - 8;
+    const R = Math.max(2, Math.min(w / 2, (h - 36) / 2) - 8);
     const cy = 14 + R + 4;
     const sec = d.getSeconds() + d.getMilliseconds() / 1000;
     const min = d.getMinutes() + sec / 60;
@@ -397,7 +399,7 @@ export class Instruments {
   private globe(ctx: CanvasRenderingContext2D, w: number, h: number, t: number): void {
     const cx = w / 2;
     const cy = 14 + (h - 14) / 2;
-    const R = Math.min(w, h - 14) / 2 - 10;
+    const R = Math.max(2, Math.min(w, h - 14) / 2 - 10);
     const rot = t * 0.22;
     const tilt = 0.4;
     const ct = Math.cos(tilt);

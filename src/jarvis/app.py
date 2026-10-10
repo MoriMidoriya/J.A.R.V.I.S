@@ -32,6 +32,7 @@ from jarvis.server.api import build_app
 from jarvis.server.api import serve as serve_api
 from jarvis.server.hub import Hub
 from jarvis.stt import make_stt
+from jarvis.tools import hud as hud_tools
 from jarvis.tools import screen
 from jarvis.tools.all import registry
 from jarvis.tts import make_tts
@@ -56,6 +57,7 @@ class JarvisApp:
         self.pipeline: VoicePipeline | None = None
         self.loop: asyncio.AbstractEventLoop | None = None
         self.hub = Hub(settings, self.bus)
+        hud_tools.set_hooks(stop_backend=self.request_stop, window_attached=lambda: self.hub.window_attached)  # "power down" by voice
         self.reminders = ReminderService(self.bus)
         self.llm_ready = asyncio.Event()
         self._bg: list[asyncio.Future] = []

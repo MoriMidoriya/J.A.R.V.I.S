@@ -367,7 +367,7 @@ Calibration (measured live, Kokoro `bm_george`, 268 samples over one reply): `au
 max 0.66 at ~18 Hz (the `AudioPlayer` already compresses RMS as `min(1,(rms·4)^0.7)` at 40 Hz and de-duplicates
 changes < 0.02). HUD gain is 1.1 so normal speech sits around 0.4 and peaks near 0.75 without clipping.
 
-### Layout modes (`ui.mode`, tray menu, or `Ctrl+Shift+M` to cycle)
+### Layout modes (`ui.mode`, tray menu, header buttons, voice, or `Ctrl+Shift+M` = HUD ⇄ full interface — see §12.1)
 
 | Mode | Size / place | Shows | Mouse |
 |---|---|---|---|
@@ -755,8 +755,8 @@ The other two modes are for when you *want* more on screen:
 
 | Mode | When | What you get |
 |---|---|---|
-| `panel` (`Ctrl+Shift+J` switches to it, or tray → Mode) | reading / typing | A framed 560×860 console: reactor, AUDIO I/O + SPECTRUM + SYSTEM instruments, scrolling transcript, text box, latency line. Normal window, draggable. |
-| `cinematic` (tray or `Ctrl+Shift+M`) | the show | Full-screen takeover: desktop dimmed by `ui.cinematic_dim` (0.45), six instruments around a big reactor, PIPELINE strip, big type. Explicit only — it is never entered automatically. |
+| `panel` (`Ctrl+Shift+J` switches to it, or tray → Mode) | reading / typing | A framed 560×860 console: reactor, up to three instruments (AUDIO I/O + SPECTRUM + SYSTEM by default), scrolling transcript, text box, latency line. Draggable by its header. |
+| `cinematic` (tray, `Ctrl+Shift+M`, ⤢ in the header, or "show the full interface") | the show | Full-screen takeover: desktop dimmed by `ui.cinematic_dim` (0.45), the instruments around a big reactor, PIPELINE strip, big type. Explicit only — it is never entered automatically. The switch is animated (§12.1). |
 
 Confirmations: in compact mode the amber card appears beside the reactor with "say *yes* or *no*" (the window is
 click-through, so there are no buttons there); in panel/cinematic the **Confirm / Cancel** buttons are back.
@@ -767,7 +767,7 @@ click-through, so there are no buttons there); in panel/cinematic the **Confirm 
 |---|---|---|
 | **Spectrum analysis** | `audio/spectrum.py` (`BandAnalyzer`), `audio/output.py`, `tts/speaker.py`, `voice.py`, `events.py` (`Spectrum`) | 1024-sample Hann FFT → 24 log-spaced bands 80 Hz–8 kHz. A plain dB window left everything above 1.5 kHz at zero (speech falls ~8 dB/octave), so each band is measured against a reference curve (−26 dB at ≤180 Hz, −8 dB/octave, floor −60) over a 36 dB window. Measured on Kokoro `bm_george`: p50 0.30, p90 0.75 — balanced bars. Jarvis' voice: every 2nd 20 ms block (25 Hz) from a rolling ring in `AudioPlayer`, zeros on stop. Mic: per 80 ms frame (12.5 Hz, ~30 µs) only while listening, `fmax` 6 kHz at 16 kHz, +6 dB. |
 | **System stats** | `app.py` `_system_stats()`, `events.py` (`SystemStats`) | Every 2 s, only while a HUD is connected: CPU, RAM, VRAM (torch `mem_get_info`), network kbps up/down (counter deltas), battery. Debug-logged on error, never fatal. |
-| **Hub** | `server/hub.py` | `spectrum` and `system.stats` join the high-rate set (dropped first under back-pressure, never queued stale); `hello` now carries `ui` prefs (`idle_opacity`, `linger_s`, `widgets`, `cinematic_dim`). |
+| **Hub** | `server/hub.py` | `spectrum` and `system.stats` join the high-rate set (dropped first under back-pressure, never queued stale); `hello` now carries `ui` prefs (`idle_opacity`, `linger_s`, `widgets`, `cinematic_dim`; the full set since §12.1). |
 | **Reactor** | `hud/src/scene.ts` (rewritten) | From the centre: plasma core shader + white dot + halo → radar sweep → 36-block ring (slow flicker) → 144 fine ticks (counter-rotating) → 160-dash data ring (blinks like a data stream; 9 Hz while thinking) → 3 gap arcs → **96 instanced bars** (length = spectrum, 24 bands interpolated and mirrored; mic while listening; chasing pulses while thinking; a slow travelling wave at idle) → 90-tick ruler → 4 thick bracket arcs with HDR end caps + 4 thin counter-rotating arcs → 3 orbiting satellites. Bloom 0.33 + 0.22·energy, radius 0.5. Alpha-from-luma pass kept (D17) with a higher knee (0.075) and a **circular CSS mask on the canvas** so the bloom never shows the canvas as a square against the desktop (measured: ≤ 2/255 at the edge, was +17). |
 | **Instruments** | `hud/src/widgets.ts` (new), `index.html` | Canvas-2D tiles with corner brackets and mono labels: AUDIO I/O (rolling level traces, Jarvis cyan / you amber, + mirrored waveform), SPECTRUM (24 bars, falling peak caps), SYSTEM (CPU/MEM/VRAM arc gauges, NET, BAT), TELEMETRY (pentagon radar: CPU, MEM, VRAM, NET, AUDIO, with sweep), CHRONO (radar clock + date), UPLINK (rotating wireframe globe with orbiting dot — decoration), PIPELINE (ruler + STT/LLM/TTS/TOTAL bars of the last turn). One 30 fps loop; tiles with no size are skipped. |
 | **Layout** | `hud/src/style.css` (rewritten) | One CSS grid with named areas, rearranged per mode (compact / panel / cinematic). Compact: `convo` column left, reactor bottom-right, status below; `engaged` / `resting` body classes drive opacity and the fold. Panel: translucent framed console with corner brackets. Cinematic: 300 px instrument columns, reactor spanning three rows, vignette, scanlines. Transcript restyled as HUD text (YOU / JARVIS labels, hairline borders) instead of chat bubbles; input is an underline field. |
@@ -799,12 +799,101 @@ click-through, so there are no buttons there); in panel/cinematic the **Confirm 
 
 ---
 
+## 12.1 Phase 6 polish — hide, animate, configure, shut down, Start Menu (done 2026-10-10 14:00–15:00)
+
+Brief: "the HUD is always visible in standby — fine, but I need an option to hide it completely and still have him
+listening; a good animation from the HUD to the full interface; more configurable (add/remove things, never block what
+I'm working on, hide); a shut-down-Jarvis option; settings inside the full interface for which stats show; and a Start
+Menu shortcut or executable instead of a terminal command."
+
+### What already existed vs. what is new
+
+| Ask | Before | Now |
+|---|---|---|
+| Hide completely, keep listening | Existed but undiscoverable: `Ctrl+Shift+H` / tray → *Hide HUD* hid the window; the backend is a separate process so voice always kept working. | Same hotkey and tray item, plus **"hide yourself" / "show yourself"** by voice (`hud_display` tool), a *Hide HUD* button in settings, a **tray icon tinted by state** (cyan standby, amber listening, white thinking, red error; tooltip says *(HUD hidden)*) so you can see him while hidden, and an **auto-hide** preference: the window disappears on its own `linger_s` after a turn and comes back on "Hey Jarvis". An explicit hide is sticky (wake does not undo it); auto-hide is not. |
+| Animated HUD → full interface | Hard cut: the window resized and the page re-laid out instantly. | **Choreographed switch** (`hud/src/transitions.ts`): the Qt window first grows to the full screen while the page keeps the old layout pinned to the same corner (CSS docking, nothing visibly moves) → the parts wipe out (240 ms) → the layout flips → the **reactor flies** from the corner to its new place (FLIP, 620 ms, `cubic-bezier(.2,.8,.2,1)`, canvas scaled in flight) while header, tiles, transcript and input **unfold one after another** (60 ms stagger, 480 ms each); the desktop dim, vignette and scanlines fade in with it → 1.25 s later the window shrinks to the new mode's rectangle, again pixel-identical to what is on screen. Same animation back. |
+| Configurable, out of the way | 4 yaml prefs (`idle_opacity`, `linger_s`, `widgets`, `cinematic_dim`), editing yaml + restart. | **Settings drawer** (⚙ in the panel/cinematic header, tray → *Settings…*): corner of the screen (4), reactor size 200–400 px, idle brightness, linger, conversation beside the reactor on/off, status word on/off, hide completely while idle, instruments master + **7 individual tiles**, desktop dim, scanlines; actions (Hide HUD, Corner / Panel / Full interface, Shut down) and a keys & voice reference. Applied live, validated by the backend (`UICfg` bounds) and **persisted in `data/ui.json`**, which overrides `settings.yaml` `ui:` on every start. Header buttons ⚙ ⤢ ✕; `Esc` folds the full interface back to the corner; the panel can be dragged by its header. |
+| Shut down Jarvis | Tray → *Quit* only. | Tray → *Shut down J.A.R.V.I.S.*, a red confirm-twice button in settings, and **"power down" / "shut yourself down" by voice** (`quit_jarvis`, confirm tier: he asks *"Shut me down, sir — the assistant, not the PC?"*, says goodbye, then the window quits and its launcher stops the backend; with no window attached the backend stops itself). |
+| Start without a terminal | `jarvis autostart on` (Startup folder) only. | **`uv run jarvis shortcut`** → *JARVIS* in the Start Menu (`--desktop` adds a Desktop icon; `remove` / `status`), targeting the venv's `pythonw.exe -m jarvis run` with a proper **arc-reactor `.ico`** (`assets/jarvis.ico`, 7 sizes, drawn with Pillow by `ui/shortcuts.py`); autostart now uses the same builder and icon. Created on this machine. |
+
+### How the pieces talk
+
+- **Page ↔ window:** `QWebChannel` — `qwebchannel.js` is injected from Qt's own resources at document creation and
+  publishes `window.jarvisBridge` (`setMode`, `setVisible`, `show`, `hide`, `quit`, `setState`, `applyPrefs`,
+  `beginDrag`); Qt → page stays `runJavaScript` (`switchMode`, `setMode`, `openSettings`, `focusInput`). In a plain
+  browser tab the bridge is absent and `hud/src/bridge.ts` makes every call a no-op (mode switches then animate in place).
+- **Prefs:** page sends `{type:"ui.prefs", prefs:{…patch}}` → hub validates (`update_ui_prefs`, tiles merged per key) →
+  `save_ui_prefs()` → broadcast `ui.prefs` (full set) to every client → page applies CSS variables / body classes and
+  passes `corner` + `auto_hide` to the window. `hello` carries `ui` and `hotkeys`.
+- **Voice → HUD:** tools emit `UiCommand(action=show|hide|mode|shutdown)` on the bus; the hub broadcasts it; the page
+  acts through the bridge. Clients announce `{type:"client", kind:"window"|"browser"}` so `quit_jarvis` knows whether a
+  window will stop the backend.
+- **Docking maths:** compact = 720×560, panel = 560×860 (both in `ui/window.py` `SIZES` and `style.css` `--compact-*` /
+  `--panel-*`); `#hud` is `position: fixed` with `right/bottom: clamp(0px, 100vw − w, --dock-margin)` (mirrored for
+  the other corners), so the box is at the same screen position whether the window is exactly that size or full-screen.
+
+### Decisions
+- `Ctrl+Shift+M` now **toggles HUD ⇄ full interface** (panel counts as "not full") instead of cycling three modes — one
+  key, one meaning. Panel is reached by `Ctrl+Shift+J`, the drawer, the tray or the ⤡ button.
+- Explicit hide is sticky; "Hey Jarvis" only re-shows the window when *auto-hide* did the hiding. The tray icon colour
+  is the "is he listening?" indicator while hidden.
+- Voice shutdown always asks (confirm tier) — too easy to trigger by accident otherwise. The drawer button asks by a
+  second click; the tray item does not (it's two deliberate clicks already).
+- Start Menu by default, Desktop optional; both are `.lnk` files (no PyInstaller: the models/venv live here anyway).
+- Panel shows at most three instruments (the first three enabled, in `TILE_ORDER`); cinematic shows all enabled ones.
+
+### Bugs found & fixed on the way
+- **Confirmed tools were silent and left the state stuck at SPEAKING** (pre-existing, affected every confirm-tier tool):
+  `voice.confirm()` called `speaker.cancel()`, which also invalidated the *turn's own* `Utterance`, so whatever the tool
+  or LLM said after the confirmation was dropped and `_agent_turn` skipped its listening window. Removed the cancel
+  (`say()` queues behind anything still playing anyway). Verified: farewell audible, `speaking → listening` 3.6 s after
+  the tool.
+- `quit_jarvis` waited for a speaking→x edge it usually missed (the SPEAKING transition happens before the task first
+  runs) → it always hit the 15 s fallback. Now waits for the first post-speech state (listening/idle/error).
+- qwen3 bluffed "Powering down, sir. Goodbye." without calling the tool (the history contains earlier farewells). The
+  existing bluff gate (`ACTION_OPENERS`) didn't know *powering / going offline / hiding / dimming / folding*; added →
+  nudge → tool call. The tool description also says the program only exits when the tool runs.
+- First instrument frame after load used a stale tile size (ResizeObserver runs after rAF) → `arc()` with a negative
+  radius. Tiles under 60 px are skipped; radii clamped.
+- Settings rows were `<label>`s; the corner row holds four buttons and a label activates its *first* labelable
+  descendant, so clicking the text picked top-left. That row is a `div`.
+- A pending "rest" timer could auto-hide the window in the middle of a compact → cinematic switch (page still thought
+  it was compact for 240 ms). The timer is cleared when a switch starts and the window clears `auto_hidden` when it
+  leaves compact.
+
+### Test results (real stack, `pythonw -m jarvis run` via the Start Menu shortcut)
+
+| Check | Result |
+|---|---|
+| Build | `tsc --noEmit` + `vite build` clean; ruff clean on all touched Python. |
+| Shortcut | `jarvis shortcut` → `%APPDATA%\…\Start Menu\Programs\JARVIS.lnk` → `pythonw.exe -m jarvis run`, working dir = repo, icon `assets\jarvis.ico`; launched Jarvis four times from it during testing. |
+| Bridge | hub logs *HUD client is a window*; `hello.hotkeys` shown in the drawer. |
+| Animated switch | "show the full interface" by voice → `hud_display(cinematic)`; mid-flight desktop frame shows the reactor between corner and centre with tiles wiping in and the dim fading; final frame = clean cinematic. ✕ / Esc / "back to the corner" → back. You exercised it ~12 times on your own meanwhile. |
+| Settings persistence | Reactor size slider → `data/ui.json` `reactor_size: 220` (your choice, kept); re-read on the next start. |
+| Hide by voice | "hide yourself" → window gone, backend listening, *The HUD is hidden; I am still listening*; "show yourself" → back, engaged with the exchange beside the reactor. |
+| Auto-hide | `auto_hide: true, linger_s: 2` → *HUD hidden (auto-hide while resting)* 2.0 s after idle; turning it off → *HUD shown* immediately. |
+| Shutdown | Tray (you), settings button (you), and voice: `quit_jarvis` → confirm → farewell → *quit requested from the HUD* → *backend stopped (code 0)*, 0 processes left — three runs. |
+| Mode switch under the user | Compact ⇄ cinematic every few seconds while typing/recording: no stuck windows, no leftover full-screen window. |
+
+### Known limitations (Phase 6 polish)
+- Dragging the panel is session-only: the next mode switch re-docks it to the chosen corner.
+- Panel shows at most three instruments; which ones is "the first three enabled" rather than a free pick.
+- Cinematic leaves an empty slot where a disabled side instrument used to be (the layout stays symmetric).
+- The browser tab has no window to hide; its *Hide HUD* does nothing and *Shut down* calls `POST /shutdown` directly.
+- Observed during testing, not caused by this work: at 14:52 your audio output device vanished (`MME error 6: no driver
+  installed`), after which he could not speak and the voice shutdown fell back to its 15 s timeout. If he goes quiet,
+  check the Windows output device and restart him.
+
+---
+
 ## 13. Git history
 
 Hashes as on GitHub after you rewrote the Phase 2–5 messages on 2026-10-10 (content unchanged; the local commits were
 rebased onto that history, so earlier hashes quoted in this file's history are superseded by these):
 
 ```
+(next)   Phase 6 polish: hide/auto-hide, animated mode switch, settings drawer + data/ui.json, voice HUD/shutdown tools, Start Menu shortcut
+f26a434  STATUS: record Phase 6 commit hash
 2aa03cb  Phase 6: HUD overhaul — spectrum-driven instrument-ring reactor, side instruments, compact attention behaviour, ui prefs
 0e44ea8  STATUS: update git history hashes after message rewrite + rebase
 f94bfa0  Cleanup after model evaluation: removed Liquid/Parakeet models, test artefacts and scripts (16.2 GB); docs

@@ -4,6 +4,7 @@ from jarvis.tools import (  # noqa: F401
     apps,
     browser,
     files,
+    hud,
     inputs,
     media,
     memory,

@@ -9,6 +9,7 @@ tiers:
     - sleep_pc
     - shutdown_pc
     - restart_pc
+    - quit_jarvis            # "power down" = quit the assistant itself (not the PC); asks first so a mis-hear can't switch him off
     # radios
     - set_wifi
     - set_bluetooth

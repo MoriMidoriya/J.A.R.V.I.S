@@ -21,7 +21,8 @@ TextCB = Callable[[str], Awaitable[None] | None]
 # Reply openers that describe an action; if no tool was actually called, the model is bluffing.
 ACTION_OPENERS = re.compile(
     r"^\W*(opening|launching|starting|closing|quitting|playing|searching|looking|finding|locating|setting|muting|unmuting|"
-    r"turning|locking|shutting|restarting|sleeping|taking|showing|switching|adjusting|increasing|decreasing|lowering|raising)\b",
+    r"turning|locking|shutting|restarting|sleeping|taking|showing|switching|adjusting|increasing|decreasing|lowering|raising|"
+    r"powering|going\s+offline|hiding|dimming|folding)\b",
     re.IGNORECASE,
 )
 NUDGE = (

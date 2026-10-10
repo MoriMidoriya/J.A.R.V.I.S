@@ -1,9 +1,17 @@
 /* J.A.R.V.I.S. HUD — transparent overlay styling.
    The body is transparent so the PySide6 window can be see-through. main.ts sets body classes:
      mode      compact | panel | cinematic          (from ?mode= or the backend's hello)
+     corner    corner-bottom-right | corner-bottom-left | corner-top-right | corner-top-left   (ui.corner)
      attention engaged | resting                   (compact: resting = dimmed, conversation folded away)
-     misc      pre-boot (boot sequence running), no-widgets, bg (opaque background for browser dev)
-   Layout is one CSS grid with named areas; each mode re-arranges the same elements. */
+     prefs     no-widgets, no-convo, no-status, no-scanlines   (+ .tile.off for individual instruments)
+     misc      pre-boot (boot sequence running), switching (mode animation), settings-open,
+               bg (opaque background for browser dev)
+   Layout is one CSS grid with named areas; each mode re-arranges the same elements.
+
+   Docking: compact and panel are fixed-size boxes (= the Qt window's size, ui/window.py SIZES) pinned to the chosen
+   corner with --dock-margin. When the viewport is exactly that size the box fills it; when it is larger (the window
+   grows to the full screen during a mode switch, or a browser tab) the box stays in the corner — so the window can
+   change size without anything on screen moving. */
 
 :root {
   --cyan: #34e4f5;
@@ -16,6 +24,10 @@
   --panel: rgba(3, 12, 20, 0.6);
   --idle-opacity: 0.55;
   --cinematic-dim: 0.45;
+  --reactor-size: 300px;
+  --dock-margin: 24px;
+  --compact-w: 720px; --compact-h: 560px;   /* must match ui/window.py SIZES */
+  --panel-w: 560px; --panel-h: 860px;
   --font: "Segoe UI", "Inter", system-ui, sans-serif;
   --mono: "Cascadia Code", "Consolas", monospace;
 }
@@ -29,12 +41,13 @@ html, body {
   user-select: none;
   -webkit-user-select: none;
 }
+body { transition: background-color 0.6s ease; }
 body.bg { background: radial-gradient(ellipse at center, #0a1a26 0%, #02070c 70%); }
-body.cinematic { background: rgba(3, 10, 18, var(--cinematic-dim)); }
+body.cinematic { background-color: rgba(3, 10, 18, var(--cinematic-dim)); }
 body.cinematic.bg { background: radial-gradient(ellipse at center, #0a1a26 0%, #02070c 70%); }
 
-#vignette { position: fixed; inset: 0; pointer-events: none; display: none; box-shadow: inset 0 0 220px rgba(0, 0, 0, 0.7); }
-body.cinematic #vignette { display: block; }
+#vignette { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.6s ease; box-shadow: inset 0 0 220px rgba(0, 0, 0, 0.7); }
+body.cinematic #vignette { opacity: 1; }
 
 /* ---------- grid ---------- */
 #hud {
@@ -42,11 +55,22 @@ body.cinematic #vignette { display: block; }
   display: grid; gap: 12px;
   padding: 18px 20px;
   pointer-events: none;
+  border: 1px solid transparent;
+  transition: background-color 0.5s ease, border-color 0.5s ease;
 }
 #hud > * { pointer-events: auto; min-width: 0; min-height: 0; transition: opacity 0.5s ease; }
 body.pre-boot #hud > :not(#reactor) { opacity: 0; }
 
-#reactor { grid-area: reactor; position: relative; transition: opacity 0.8s ease; }
+/* docked boxes (see header comment) */
+body.compact #hud { --w: var(--compact-w); --h: var(--compact-h); }
+body.panel #hud { --w: var(--panel-w); --h: var(--panel-h); }
+body:not(.cinematic) #hud { inset: auto; width: min(var(--w), 100vw); height: min(var(--h), 100vh); }
+body:not(.cinematic).corner-bottom-right #hud, body:not(.cinematic).corner-top-right #hud { right: clamp(0px, calc(100vw - var(--w)), var(--dock-margin)); }
+body:not(.cinematic).corner-bottom-left #hud, body:not(.cinematic).corner-top-left #hud { left: clamp(0px, calc(100vw - var(--w)), var(--dock-margin)); }
+body:not(.cinematic).corner-bottom-right #hud, body:not(.cinematic).corner-bottom-left #hud { bottom: clamp(0px, calc(100vh - var(--h)), var(--dock-margin)); }
+body:not(.cinematic).corner-top-right #hud, body:not(.cinematic).corner-top-left #hud { top: clamp(0px, calc(100vh - var(--h)), var(--dock-margin)); }
+
+#reactor { grid-area: reactor; position: relative; transition: opacity 0.8s ease; transform-origin: 0 0; } /* origin: FLIP math in transitions.ts */
 /* circular mask: the bloom fades out before the canvas edge, so no square ever shows against the desktop */
 #scene {
   position: absolute; inset: 0; width: 100%; height: 100%; display: block;
@@ -57,11 +81,17 @@ body.pre-boot #hud > :not(#reactor) { opacity: 0; }
 /* ---------- header ---------- */
 #head { grid-area: head; display: flex; justify-content: space-between; align-items: center; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
 .brand { font-weight: 300; letter-spacing: 0.42em; font-size: 14px; color: var(--accent); text-shadow: 0 0 12px rgba(var(--accent-rgb), 0.6); }
-.status { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.25em; color: var(--accent); }
+.status { display: flex; align-items: center; gap: 8px; margin-left: auto; font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.25em; color: var(--accent); }
 #state-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); transition: background 0.3s, box-shadow 0.3s; }
 body[data-state="listening"] #state-dot, body[data-state="confirming"] #state-dot { animation: dot 1s ease-in-out infinite; }
 body[data-state="thinking"] #state-dot { animation: dot 0.35s ease-in-out infinite; }
 @keyframes dot { 50% { opacity: 0.25; } }
+/* header buttons: settings / full interface / back to the corner (panel + cinematic only) */
+.hbtns { display: flex; gap: 4px; margin-left: 16px; }
+.hbtn { font: inherit; font-size: 13px; width: 26px; height: 24px; padding: 0; line-height: 1; cursor: pointer; border: 1px solid transparent; background: transparent; color: var(--accent); opacity: 0.6; transition: opacity 0.2s, border-color 0.2s; }
+.hbtn:hover { opacity: 1; border-color: var(--line); text-shadow: 0 0 8px var(--accent); }
+body.panel #head { cursor: move; } /* drag the window by its header (bridge.beginDrag) */
+body.panel #head .hbtn { cursor: pointer; }
 
 /* ---------- instrument tiles ---------- */
 .tile { position: relative; border: 1px solid rgba(var(--accent-rgb), 0.18); background: rgba(3, 12, 20, 0.28); }
@@ -75,7 +105,7 @@ body[data-state="thinking"] #state-dot { animation: dot 0.35s ease-in-out infini
 .tile.bare .lbl { top: 11px; left: auto; right: 0; }
 #t-wave { grid-area: wave; } #t-radar { grid-area: radar; } #t-clock { grid-area: clock; }
 #t-system { grid-area: system; } #t-spectrum { grid-area: spectrum; } #t-globe { grid-area: globe; } #t-pipeline { grid-area: pipeline; }
-body.no-widgets .tile { display: none !important; }
+.tile.off, body.no-widgets .tile { display: none !important; } /* switched off in settings (main.ts layoutTiles) */
 
 /* ---------- conversation ---------- */
 #convo { grid-area: convo; display: flex; flex-direction: column; justify-content: flex-end; min-height: 0; }
@@ -156,63 +186,155 @@ body.compact .boot-lines { min-width: 0; align-items: center; }
 
 /* ---------- scanlines (cinematic only) ---------- */
 #scanlines {
-  position: fixed; inset: 0; pointer-events: none; mix-blend-mode: overlay; opacity: 0.22; display: none;
+  position: fixed; inset: 0; pointer-events: none; mix-blend-mode: overlay; opacity: 0; transition: opacity 0.6s ease;
   background: repeating-linear-gradient(to bottom, rgba(255, 255, 255, 0.06) 0 1px, transparent 1px 3px);
 }
-body.cinematic #scanlines { display: block; }
+body.cinematic #scanlines { opacity: 0.22; }
+body.no-scanlines #scanlines { display: none; }
 
 .hidden { display: none !important; }
 
+/* ---------- settings drawer ---------- */
+#settings {
+  position: absolute; inset: 0; z-index: 5;
+  display: flex; flex-direction: column;
+  background: rgba(3, 12, 20, 0.93); backdrop-filter: blur(14px);
+  border: 1px solid var(--line);
+  font-size: 12.5px; color: var(--white);
+  animation: rise 0.25s ease-out;
+}
+body.cinematic #settings { inset: 0 0 0 auto; width: 440px; border-width: 0 0 0 1px; box-shadow: -30px 0 80px rgba(0, 0, 0, 0.55); }
+.s-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px 10px; border-bottom: 1px solid var(--line); }
+.s-title { font-weight: 300; letter-spacing: 0.42em; font-size: 13px; color: var(--accent); }
+.s-body { flex: 1; overflow-y: auto; padding: 4px 18px 20px; scrollbar-width: thin; scrollbar-color: rgba(var(--accent-rgb), 0.35) transparent; }
+.s-sec { margin-top: 18px; }
+.s-sec h3 { margin: 0 0 4px; font-family: var(--mono); font-weight: 400; font-size: 9.5px; letter-spacing: 0.3em; color: var(--accent); opacity: 0.85; }
+.s-hint { margin: 0 0 6px; font-size: 11px; line-height: 1.4; color: rgba(232, 246, 255, 0.5); }
+.s-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 7px 0; border-bottom: 1px solid rgba(var(--accent-rgb), 0.08); cursor: pointer; }
+.s-label { display: flex; flex-direction: column; gap: 1px; }
+.s-label small { font-size: 10px; color: rgba(232, 246, 255, 0.45); }
+/* switch */
+.sw { position: relative; width: 34px; height: 18px; flex: none; }
+.sw input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.sw i { position: absolute; inset: 0; border: 1px solid var(--line); background: rgba(3, 12, 20, 0.6); transition: background 0.2s, border-color 0.2s; pointer-events: none; }
+.sw i::after { content: ""; position: absolute; top: 3px; left: 3px; width: 10px; height: 10px; background: rgba(232, 246, 255, 0.4); transition: transform 0.2s, background 0.2s; }
+.sw input:checked + i { border-color: var(--accent); background: rgba(var(--accent-rgb), 0.15); }
+.sw input:checked + i::after { transform: translateX(16px); background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.sw input:disabled + i { opacity: 0.35; }
+/* range */
+.rng { display: flex; align-items: center; gap: 10px; flex: none; }
+.rng input { -webkit-appearance: none; appearance: none; width: 130px; height: 2px; margin: 0; outline: none; cursor: pointer; background: linear-gradient(to right, var(--accent) var(--fill, 0%), rgba(var(--accent-rgb), 0.25) var(--fill, 0%)); }
+.rng input::-webkit-slider-thumb { -webkit-appearance: none; width: 11px; height: 11px; border: none; background: var(--accent); box-shadow: 0 0 8px var(--accent); transform: rotate(45deg); }
+.rng output { font-family: var(--mono); font-size: 10.5px; min-width: 46px; text-align: right; color: var(--accent); }
+/* corner picker: four little squares, the lit dot is where the reactor lives */
+.corners { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; width: 58px; height: 40px; flex: none; }
+.s-row:not(label) { cursor: default; }
+.corner { position: relative; padding: 0; border: 1px solid var(--line); background: rgba(3, 12, 20, 0.6); cursor: pointer; }
+.corner i { position: absolute; width: 6px; height: 6px; background: rgba(232, 246, 255, 0.3); }
+.corner.top-left i { top: 2px; left: 2px; } .corner.top-right i { top: 2px; right: 2px; }
+.corner.bottom-left i { bottom: 2px; left: 2px; } .corner.bottom-right i { bottom: 2px; right: 2px; }
+.corner:hover { border-color: var(--accent); }
+.corner.on { border-color: var(--accent); background: rgba(var(--accent-rgb), 0.15); }
+.corner.on i { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+/* instrument toggles */
+.s-tiles { display: grid; grid-template-columns: 1fr 1fr; column-gap: 18px; }
+.s-tile { font-size: 12px; }
+/* actions */
+.s-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 4px; align-items: center; }
+.s-actions .btn { border-color: var(--line); color: var(--accent); }
+.s-actions .btn:hover { background: rgba(var(--accent-rgb), 0.12); border-color: var(--accent); }
+.s-actions .btn.danger { border-color: rgba(255, 90, 90, 0.5); color: #ff9c9c; }
+.s-actions .btn.danger:hover, .s-actions .btn.danger.armed { background: rgba(255, 90, 90, 0.15); border-color: var(--red); color: #ffb3b3; }
+.s-actions .s-hint { margin: 0; }
+/* keys & voice reference */
+.s-ref { display: grid; grid-template-columns: auto 1fr; gap: 5px 14px; margin: 4px 0 0; font-size: 11.5px; }
+.s-ref dt { font-family: var(--mono); font-size: 10.5px; color: var(--accent); white-space: nowrap; }
+.s-ref dd { margin: 0; color: rgba(232, 246, 255, 0.7); }
+
 /* ======================================================================================
-   COMPACT — reactor bottom-right, conversation unfolds to its left while engaged.
+   COMPACT — reactor in a corner, conversation unfolds beside it (towards the screen centre) while engaged.
    The window is click-through; nothing here is interactive except by voice. */
 body.compact #hud {
   padding: 10px 12px 8px;
-  grid-template-columns: minmax(0, 1fr) 300px;
-  grid-template-rows: minmax(0, 1fr) 300px 22px;
+  grid-template-columns: minmax(0, 1fr) var(--reactor-size);
+  grid-template-rows: minmax(0, 1fr) var(--reactor-size) 22px;
   grid-template-areas:
     "convo ."
     "convo reactor"
     "convo head";
   gap: 6px 10px;
 }
-body.compact .tile, body.compact #foot, body.compact .brand { display: none; }
-body.compact #head { border: none; padding: 0; justify-content: center; }
+body.compact.corner-bottom-left #hud {
+  grid-template-columns: var(--reactor-size) minmax(0, 1fr);
+  grid-template-areas:
+    ". convo"
+    "reactor convo"
+    "head convo";
+}
+body.compact.corner-top-right #hud {
+  grid-template-rows: var(--reactor-size) 22px minmax(0, 1fr);
+  grid-template-areas:
+    "convo reactor"
+    "convo head"
+    "convo .";
+}
+body.compact.corner-top-left #hud {
+  grid-template-columns: var(--reactor-size) minmax(0, 1fr);
+  grid-template-rows: var(--reactor-size) 22px minmax(0, 1fr);
+  grid-template-areas:
+    "reactor convo"
+    "head convo"
+    ". convo";
+}
+body.compact .tile, body.compact #foot, body.compact .brand, body.compact .hbtns { display: none; }
+body.compact #head { border: none; padding: 0; justify-content: center; cursor: default; }
+body.compact .status { margin-left: 0; }
+body.compact.no-status #head { visibility: hidden; }
 body.compact #convo { align-items: flex-end; padding-bottom: 60px; opacity: 0; transform: translateX(12px); transition: opacity 0.45s ease, transform 0.45s ease; }
+body.compact.corner-bottom-left #convo, body.compact.corner-top-left #convo { align-items: flex-start; transform: translateX(-12px); }
+body.compact.corner-top-right #convo, body.compact.corner-top-left #convo { justify-content: flex-start; padding-bottom: 0; padding-top: 60px; }
 body.compact.engaged #convo { opacity: 1; transform: none; }
+body.compact.no-convo #convo { display: none; }
 body.compact #transcript { width: 100%; }
-/* everything right-aligned, towards the reactor */
+/* messages hug the reactor's side: right-aligned for right corners, left-aligned for left corners */
 body.compact .msg { max-width: 100%; align-self: flex-end; text-align: right; border-left: none; border-right: 1px solid var(--line); padding: 3px 12px 3px 0; text-shadow: 0 0 6px rgba(0, 0, 0, 0.95), 0 1px 2px rgba(0, 0, 0, 0.9); font-size: 13px; }
 body.compact .msg.assistant { border-right-color: var(--accent); }
 body.compact .msg.user { border-right-color: rgba(255, 182, 72, 0.5); }
+body.compact.corner-bottom-left .msg, body.compact.corner-top-left .msg { align-self: flex-start; text-align: left; border-right: none; border-left: 1px solid var(--line); padding: 3px 0 3px 12px; }
+body.compact.corner-bottom-left .msg.assistant, body.compact.corner-top-left .msg.assistant { border-left-color: var(--accent); }
+body.compact.corner-bottom-left .msg.user, body.compact.corner-top-left .msg.user { border-left-color: rgba(255, 182, 72, 0.5); }
 body.compact .msg.notice { border: none; }
 body.compact .msg:not(:nth-last-child(-n + 3)) { display: none; }
 body.compact #tools { justify-content: flex-end; }
+body.compact.corner-bottom-left #tools, body.compact.corner-top-left #tools { justify-content: flex-start; }
 body.compact .chip { text-shadow: 0 0 6px rgba(0, 0, 0, 0.9); }
 body.compact #confirm .row { display: none; }
 body.compact #confirm .voice-hint { display: block; }
 body.compact.resting #reactor, body.compact.resting #head { opacity: var(--idle-opacity); }
+body.compact #settings { display: none; }
 
 /* ======================================================================================
-   PANEL — a framed console: reactor on top, three instruments, transcript, input. */
+   PANEL — a framed console: reactor on top, up to three instruments, transcript, input. */
 body.panel #hud {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   grid-template-rows: auto 330px auto minmax(0, 1fr) auto;
   grid-template-areas:
     "head head head"
     "reactor reactor reactor"
-    "wave spectrum system"
+    ". . ."
     "convo convo convo"
     "foot foot foot";
-  background: var(--panel);
-  border: 1px solid var(--line);
+  background-color: var(--panel);
+  border-color: var(--line);
   backdrop-filter: blur(10px);
 }
 body.panel #hud::before, body.panel #hud::after { content: ""; position: absolute; width: 14px; height: 14px; pointer-events: none; }
 body.panel #hud::before { top: -1px; left: -1px; border-top: 2px solid var(--accent); border-left: 2px solid var(--accent); }
 body.panel #hud::after { bottom: -1px; right: -1px; border-bottom: 2px solid var(--accent); border-right: 2px solid var(--accent); }
-body.panel .tile { height: 118px; }
-body.panel #t-radar, body.panel #t-clock, body.panel #t-globe, body.panel #t-pipeline { display: none; }
+/* the enabled instruments auto-flow into row 3 in this order; main.ts shows at most three (PANEL_MAX_TILES) */
+body.panel #t-wave, body.panel #t-spectrum, body.panel #t-system, body.panel #t-radar, body.panel #t-clock, body.panel #t-globe, body.panel #t-pipeline { grid-area: auto; grid-row: 3; height: 118px; }
+body.panel #t-wave { order: 1; } body.panel #t-spectrum { order: 2; } body.panel #t-system { order: 3; } body.panel #t-radar { order: 4; }
+body.panel #t-clock { order: 5; } body.panel #t-globe { order: 6; } body.panel #t-pipeline { order: 7; }
 
 /* ======================================================================================
    CINEMATIC — full screen, dimmed desktop, instruments either side of the reactor. */

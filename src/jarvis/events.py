@@ -149,6 +149,22 @@ class Metrics(Event):
     total_ms: int | None = None
 
 
+class UiPrefs(Event):
+    """UI preferences changed (from a HUD's settings drawer); every connected HUD applies them."""
+
+    type: Literal["ui.prefs"] = "ui.prefs"
+    prefs: dict[str, Any]
+
+
+class UiCommand(Event):
+    """Something asked the HUD to do something with itself (voice: "hide yourself", "show the full interface",
+    "power down"). The HUD executes it through its window bridge; a browser tab does what it can (layout only)."""
+
+    type: Literal["ui.command"] = "ui.command"
+    action: Literal["show", "hide", "mode", "shutdown"]
+    mode: Literal["compact", "panel", "cinematic"] | None = None
+
+
 Handler = Callable[[Event], Awaitable[None] | None]
 
 

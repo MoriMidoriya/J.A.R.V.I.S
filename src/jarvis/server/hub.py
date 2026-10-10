@@ -3,13 +3,17 @@
 Protocol (JSON objects, one per message)
   server → client : every `jarvis.events.Event` as `event.to_json()` (type = "state", "wake", "transcript.final",
                     "assistant.token", "assistant.final", "audio.level", "mic.level", "spectrum", "system.stats",
-                    "tool.call", "tool.result", "confirm.request", "confirm.resolved", "notice", "reminder.due", "metrics"),
+                    "tool.call", "tool.result", "confirm.request", "confirm.resolved", "notice", "reminder.due", "metrics",
+                    "ui.prefs", "ui.command"),
                     plus `{"type": "hello", ...}` once on connect with the current state, UI preferences and history.
   client → server : {"type": "text", "text": "..."}                       typed command
                     {"type": "image", "text": "...", "image_b64": "...", "mime": "image/png"}
                     {"type": "confirm", "id": "...", "accepted": true}    confirm button
                     {"type": "wake"}                                      click the reactor
                     {"type": "interrupt"}                                 stop talking
+                    {"type": "client", "kind": "window" | "browser"}      who is this (the Qt shell announces itself)
+                    {"type": "ui.prefs", "prefs": {...}}                  settings drawer: validated, saved to data/ui.json,
+                                                                          broadcast to every client as `ui.prefs`
 """
 
 from __future__ import annotations
@@ -22,9 +26,10 @@ from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
 from loguru import logger
+from pydantic import ValidationError
 
-from jarvis.config import Settings
-from jarvis.events import Event, EventBus
+from jarvis.config import Settings, save_ui_prefs, ui_prefs, update_ui_prefs
+from jarvis.events import Event, EventBus, UiPrefs
 
 HIGH_RATE = {"audio.level", "mic.level", "spectrum", "system.stats"}  # droppable when a client lags; everything else is delivered in order
 HISTORY_TYPES = {"transcript.final", "assistant.final", "tool.call", "tool.result", "notice", "reminder.due"}
@@ -36,6 +41,7 @@ class Hub:
         self.s = settings
         self.bus = bus
         self.clients: dict[WebSocket, asyncio.Queue[str]] = {}
+        self.kinds: dict[WebSocket, str] = {}  # "window" (the Qt shell) | "browser"
         self.state = "booting"
         self.history: deque[dict[str, Any]] = deque(maxlen=40)  # replayed to late-joining clients
         self.pending_confirm: dict[str, Any] | None = None  # so a (re)connecting HUD can still show the buttons
@@ -78,15 +84,31 @@ class Hub:
             "model": self.s.llm.primary,
             "user_title": self.s.assistant.user_title,
             "mode": self.s.ui.mode,
-            "ui": {
-                "idle_opacity": self.s.ui.idle_opacity,
-                "linger_s": self.s.ui.linger_s,
-                "widgets": self.s.ui.widgets,
-                "cinematic_dim": self.s.ui.cinematic_dim,
-            },
+            "ui": ui_prefs(self.s.ui),
+            "hotkeys": {"text_input": self.s.ui.hotkey_text_input, "toggle_hud": self.s.ui.hotkey_toggle_hud},
             "history": list(self.history),
             "pending_confirm": self.pending_confirm,
         }
+
+    @property
+    def window_attached(self) -> bool:
+        """True while the Qt shell is connected (browser tabs don't count) — it owns window visibility and quitting."""
+        return any(k == "window" for k in self.kinds.values())
+
+    async def set_prefs(self, patch: dict[str, Any]) -> dict[str, Any]:
+        """Validate + apply + persist a prefs patch, then tell every HUD. Returns the full effective prefs."""
+        try:
+            self.s.ui = update_ui_prefs(self.s.ui, patch)
+        except ValidationError as e:
+            logger.warning("rejected ui prefs {}: {}", patch, e.errors()[0].get("msg") if e.errors() else e)
+            raise
+        try:
+            save_ui_prefs(self.s.ui)
+        except OSError as e:
+            logger.warning("could not save ui prefs: {}", e)
+        prefs = ui_prefs(self.s.ui)
+        await self.bus.emit(UiPrefs(prefs=prefs))
+        return prefs
 
     # ---- clients → pipeline --------------------------------------------------------------------
     async def serve(self, ws: WebSocket) -> None:
@@ -101,7 +123,7 @@ class Hub:
                 raw = await ws.receive_text()
                 try:
                     # Commands may take seconds (a whole spoken turn); never block this client's receive loop on them.
-                    asyncio.create_task(self._handle_logged(json.loads(raw)))
+                    asyncio.create_task(self._handle_logged(json.loads(raw), ws))
                 except Exception:  # noqa: BLE001
                     logger.exception("bad HUD message: {}", raw[:200])
         except WebSocketDisconnect:
@@ -111,16 +133,31 @@ class Hub:
         finally:
             writer.cancel()
             self.clients.pop(ws, None)
+            self.kinds.pop(ws, None)
             logger.info("HUD disconnected ({} left)", len(self.clients))
 
-    async def _handle_logged(self, msg: dict[str, Any]) -> None:
+    async def _handle_logged(self, msg: dict[str, Any], ws: WebSocket | None = None) -> None:
         try:
-            await self.handle(msg)
+            await self.handle(msg, ws)
         except Exception:  # noqa: BLE001
             logger.exception("HUD command failed: {}", msg.get("type"))
 
-    async def handle(self, msg: dict[str, Any]) -> None:
+    async def handle(self, msg: dict[str, Any], ws: WebSocket | None = None) -> None:
         kind = msg.get("type")
+        # UI-only messages work before (and without) the voice pipeline.
+        if kind == "client":
+            if ws is not None:
+                self.kinds[ws] = "window" if msg.get("kind") == "window" else "browser"
+                logger.debug("HUD client is a {}", self.kinds[ws])
+            return
+        if kind == "ui.prefs":
+            patch = msg.get("prefs")
+            if isinstance(patch, dict):
+                try:
+                    await self.set_prefs(patch)
+                except ValidationError:
+                    pass
+            return
         p = self.pipeline
         if p is None:
             logger.warning("HUD message {} before the pipeline is ready", kind)

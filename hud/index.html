@@ -13,6 +13,11 @@
       <header id="head">
         <div class="brand">J.A.R.V.I.S.</div>
         <div class="status"><span id="state-dot"></span><span id="state-text">BOOTING</span></div>
+        <div class="hbtns">
+          <button id="hb-settings" class="hbtn" type="button" title="Settings">⚙</button>
+          <button id="hb-expand" class="hbtn" type="button" title="Full interface  (Ctrl+Shift+M)">⤢</button>
+          <button id="hb-close" class="hbtn" type="button" title="Back to the corner  (Esc)">✕</button>
+        </div>
       </header>
 
       <!-- the reactor (Three.js) -->
@@ -52,6 +57,9 @@
 
       <div id="drop-hint" class="hidden">Drop image to analyse</div>
       <div id="image-preview" class="hidden"><img alt="" /><button id="image-clear" type="button" aria-label="remove image">×</button></div>
+
+      <!-- settings drawer (built by settings.ts) -->
+      <aside id="settings" class="hidden"></aside>
     </div>
     <div id="boot"><div class="boot-lines"></div></div>
     <div id="scanlines"></div>

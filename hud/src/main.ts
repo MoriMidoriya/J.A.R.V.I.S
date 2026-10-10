@@ -1,17 +1,26 @@
 /** HUD entry point: wires the WebSocket events to the Three.js scene, the canvas instruments and the DOM panels,
- *  and runs the "attention" behaviour of the compact overlay (dim while idle → unfold on "Hey Jarvis" → settle). */
+ *  runs the "attention" behaviour of the compact overlay (dim while idle → unfold on "Hey Jarvis" → settle), applies
+ *  the user's preferences, drives the animated mode switches and talks to the Qt shell through `bridge`. */
 
+import { bridge } from "./bridge";
 import { ReactorScene } from "./scene";
+import { initSettings, type Action, type PrefPatch } from "./settings";
+import { switchMode as animateSwitch } from "./transitions";
 import { Instruments } from "./widgets";
-import { JarvisSocket, type JarvisState, type ServerEvent, type UiPrefs } from "./ws";
+import { JarvisSocket, type Corner, type JarvisState, type Mode, type ServerEvent, type TileKind, type UiCommand, type UiPrefs } from "./ws";
 
 const $ = <T extends HTMLElement>(sel: string): T => document.querySelector(sel) as T;
 
 // ---- URL options -------------------------------------------------------------------------------
-// ?mode=compact|panel|cinematic  layout (the Qt shell passes its mode); ?bg=1 opaque background for browser dev.
+// ?mode=compact|panel|cinematic  layout (the Qt shell passes its mode)   ?corner= ?margin=  docking (ditto)
+// ?bg=1 opaque background for browser dev.
 const params = new URLSearchParams(location.search);
-const urlMode = params.get("mode");
+const MODES: Mode[] = ["compact", "panel", "cinematic"];
+const CORNERS: Corner[] = ["bottom-right", "bottom-left", "top-right", "top-left"];
+const urlMode = MODES.find((m) => m === params.get("mode")) ?? null;
+const urlCorner = CORNERS.find((c) => c === params.get("corner")) ?? null;
 if (params.get("bg") === "1") document.body.classList.add("bg");
+document.documentElement.style.setProperty("--dock-margin", `${Number(params.get("margin") ?? 24) || 0}px`);
 
 const scene = new ReactorScene($("#scene"));
 const inst = new Instruments();
@@ -20,6 +29,10 @@ const sock = new JarvisSocket();
 const el = {
   stateText: $("#state-text"),
   stateDot: $("#state-dot"),
+  head: $("#head"),
+  hbSettings: $<HTMLButtonElement>("#hb-settings"),
+  hbExpand: $<HTMLButtonElement>("#hb-expand"),
+  hbClose: $<HTMLButtonElement>("#hb-close"),
   transcript: $("#transcript"),
   tools: $("#tools"),
   confirm: $("#confirm"),
@@ -40,43 +53,113 @@ const body = document.body;
 let userTitle = "sir";
 let model = "";
 let state: JarvisState = "booting";
+let mode: Mode = "panel";
 let confirmId: string | null = null;
 let streaming: HTMLDivElement | null = null; // the assistant bubble currently receiving tokens
 let streamNode: Text | null = null; // its text node (kept separate from the blinking cursor span)
 let streamText = "";
 let pendingImage: { b64: string; mime: string } | null = null;
 const toolChips = new Map<string, HTMLSpanElement>();
-let prefs: UiPrefs = { idle_opacity: 0.55, linger_s: 8, widgets: true, cinematic_dim: 0.45 };
+let hotkeys = { text_input: "<ctrl>+<shift>+j", toggle_hud: "<ctrl>+<shift>+h" };
 
-function setMode(mode: string): void {
-  body.classList.remove("compact", "panel", "cinematic");
-  body.classList.add(mode);
+// ---- preferences --------------------------------------------------------------------------------
+// Defaults mirror UICfg (config.py); the backend's hello carries the real ones (settings.yaml overlaid by data/ui.json).
+const TILE_ORDER: TileKind[] = ["wave", "spectrum", "system", "radar", "clock", "globe", "pipeline"]; // = CSS `order` in panel
+const PANEL_MAX_TILES = 3;
+let prefs: UiPrefs = {
+  corner: urlCorner ?? "bottom-right",
+  idle_opacity: 0.55,
+  linger_s: 8,
+  reactor_size: 300,
+  show_convo: true,
+  show_status: true,
+  auto_hide: false,
+  widgets: true,
+  tiles: { wave: true, spectrum: true, system: true, radar: true, clock: true, globe: true, pipeline: true },
+  cinematic_dim: 0.45,
+  scanlines: true,
+};
+
+function merge(patch: PrefPatch): UiPrefs {
+  const { tiles, ...rest } = patch;
+  return { ...prefs, ...rest, tiles: { ...prefs.tiles, ...(tiles ?? {}) } };
 }
-setMode(urlMode ?? "panel");
 
-function applyPrefs(p: UiPrefs): void {
+/** Which instrument tiles are laid out: the enabled ones; panel shows at most three (in TILE_ORDER). */
+function layoutTiles(): void {
+  let shown = 0;
+  for (const k of TILE_ORDER) {
+    const on = prefs.widgets && prefs.tiles[k] !== false && (mode === "cinematic" || shown < PANEL_MAX_TILES);
+    document.getElementById(`t-${k}`)!.classList.toggle("off", !on);
+    if (on) shown++;
+  }
+}
+
+function applyPrefs(p: UiPrefs, { local = false } = {}): void {
   prefs = p;
-  document.documentElement.style.setProperty("--idle-opacity", String(p.idle_opacity));
-  document.documentElement.style.setProperty("--cinematic-dim", String(p.cinematic_dim));
+  const root = document.documentElement.style;
+  root.setProperty("--idle-opacity", String(p.idle_opacity));
+  root.setProperty("--cinematic-dim", String(p.cinematic_dim));
+  root.setProperty("--reactor-size", `${p.reactor_size}px`);
+  for (const c of CORNERS) body.classList.toggle(`corner-${c}`, p.corner === c);
   body.classList.toggle("no-widgets", !p.widgets);
+  body.classList.toggle("no-convo", !p.show_convo);
+  body.classList.toggle("no-status", !p.show_status);
+  body.classList.toggle("no-scanlines", !p.scanlines);
+  layoutTiles();
+  if (!local) bridge.applyPrefs({ corner: p.corner, auto_hide: p.auto_hide }); // the window docks / auto-hides accordingly
+  // already resting in the corner: apply the auto-hide choice now rather than after the next turn
+  if (mode === "compact" && state === "idle" && body.classList.contains("resting")) bridge.setVisible(!p.auto_hide);
+  settings.refresh();
+}
+
+// ---- modes --------------------------------------------------------------------------------------
+function setMode(m: Mode): void {
+  mode = m;
+  for (const x of MODES) body.classList.toggle(x, x === m);
+  layoutTiles();
+  el.hbExpand.textContent = m === "cinematic" ? "⤡" : "⤢";
+  el.hbExpand.title = m === "cinematic" ? "Panel" : "Full interface  (Ctrl+Shift+M)";
+  if (m !== "compact") bridge.setVisible(true);
+  else if (state === "idle") settle(); // back in the corner: rest (and auto-hide) again after linger_s
+}
+
+/** Run the mode-switch animation (transitions.ts). The folded-away conversation of a resting compact HUD is laid out
+ *  but invisible, so it must not be "revealed". */
+function animateTo(m: Mode): Promise<void> {
+  settings.close();
+  window.clearTimeout(lingerTimer); // a pending "rest" must not auto-hide the window mid-switch
+  lingerTimer = undefined;
+  return animateSwitch(m, setMode, { skip: (el) => el.id === "convo" && mode === "compact" && !body.classList.contains("engaged") });
+}
+
+/** Page-initiated switch (buttons, drawer, Esc, voice). In the Qt shell the window grows first and then calls
+ *  window.switchMode (below); in a plain browser tab we just animate in place. */
+function requestMode(m: Mode): void {
+  if (m === mode) return;
+  settings.close();
+  if (!bridge.setMode(m)) void animateTo(m);
 }
 
 // ---- attention (compact mode) -----------------------------------------------------------------
 // engaged: full brightness, last lines of the conversation shown beside the reactor.
-// resting: dimmed to --idle-opacity, conversation folded away. Any activity engages; `linger_s` after the turn ends
-// (state back to idle) the HUD settles back to resting. Panel/cinematic ignore the classes (see style.css).
+// resting: dimmed to --idle-opacity, conversation folded away (and with ui.auto_hide the window is hidden).
+// Any activity engages; `linger_s` after the turn ends (state back to idle) the HUD settles back to resting.
+// Panel/cinematic ignore the classes (see style.css).
 let lingerTimer: number | undefined;
 function engage(): void {
   window.clearTimeout(lingerTimer);
   lingerTimer = undefined;
   body.classList.add("engaged");
   body.classList.remove("resting");
+  if (prefs.auto_hide && mode === "compact") bridge.setVisible(true);
 }
 function settle(): void {
   window.clearTimeout(lingerTimer);
   lingerTimer = window.setTimeout(() => {
     body.classList.remove("engaged");
     body.classList.add("resting");
+    if (prefs.auto_hide && mode === "compact") bridge.setVisible(false);
   }, Math.max(0, prefs.linger_s) * 1000);
 }
 /** Something happened (reminder, notice, tool...): show it, and if nothing else is going on, settle again later. */
@@ -116,6 +199,7 @@ function setState(s: JarvisState): void {
   state = s;
   scene.setState(s);
   inst.setState(s);
+  bridge.setState(s); // tray icon colour
   el.stateText.textContent = STATE_LABEL[s] ?? s.toUpperCase();
   setAccent(STATE_HEX[s] ?? STATE_HEX.idle);
   body.dataset.state = s;
@@ -222,6 +306,37 @@ function hideConfirm(): void {
 el.confirmYes.onclick = () => confirmId && sock.send({ type: "confirm", id: confirmId, accepted: true });
 el.confirmNo.onclick = () => confirmId && sock.send({ type: "confirm", id: confirmId, accepted: false });
 
+// ---- settings drawer + header buttons + shutdown -----------------------------------------------
+function shutdown(): void {
+  // In the Qt shell the window quits and its launcher stops the backend; a bare browser tab asks the backend directly.
+  if (!bridge.quit()) void fetch("/shutdown", { method: "POST" }).catch(() => undefined);
+}
+
+const settings = initSettings($("#settings"), {
+  prefs: () => prefs,
+  preview: (patch) => applyPrefs(merge(patch), { local: true }),
+  change: (patch) => {
+    applyPrefs(merge(patch));
+    sock.send({ type: "ui.prefs", prefs: patch }); // the hub validates + persists, then broadcasts the full set back
+  },
+  action: (a: Action) => {
+    settings.close();
+    if (a === "hide") bridge.hide();
+    else if (a === "shutdown") shutdown();
+    else requestMode(a);
+  },
+  hotkeys: () => hotkeys,
+});
+el.hbSettings.onclick = () => settings.toggle();
+el.hbExpand.onclick = () => requestMode(mode === "cinematic" ? "panel" : "cinematic");
+el.hbClose.onclick = () => requestMode("compact");
+applyPrefs(prefs, { local: true });
+setMode(urlMode ?? "panel");
+// drag the panel by its header (the Qt window has no title bar)
+el.head.addEventListener("mousedown", (e) => {
+  if (e.button === 0 && mode === "panel" && !(e.target as HTMLElement).closest("button")) bridge.beginDrag();
+});
+
 // ---- input ------------------------------------------------------------------------------------
 el.form.onsubmit = (e) => {
   e.preventDefault();
@@ -237,20 +352,28 @@ el.form.onsubmit = (e) => {
 };
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
-    if (confirmId) sock.send({ type: "confirm", id: confirmId, accepted: false });
-    else sock.send({ type: "interrupt" });
+    // close what's open first; interrupt if he's busy; otherwise fold the full interface back into the corner
+    if (settings.isOpen()) settings.close();
+    else if (confirmId) sock.send({ type: "confirm", id: confirmId, accepted: false });
+    else if (state === "speaking" || state === "thinking" || state === "listening") sock.send({ type: "interrupt" });
+    else if (mode !== "compact") requestMode("compact");
   }
   if (e.key === "/" && document.activeElement !== el.input) {
     e.preventDefault();
     el.input.focus();
   }
 });
-// The Qt shell calls window.focusInput() on the Ctrl+Shift+J hotkey.
-(window as unknown as { focusInput: () => void }).focusInput = () => {
-  el.input.focus();
-  el.input.select();
-};
-(window as unknown as { setMode: (m: string) => void }).setMode = setMode;
+
+// The Qt shell (ui/window.py) calls these via runJavaScript.
+Object.assign(window as unknown as Record<string, unknown>, {
+  focusInput: () => {
+    el.input.focus();
+    el.input.select();
+  },
+  setMode,
+  switchMode: (to: Mode) => animateTo(to),
+  openSettings: () => settings.open(),
+});
 
 // ---- image drop / paste -----------------------------------------------------------------------
 function setImage(file: File): void {
@@ -331,6 +454,24 @@ function onMetrics(m: Extract<ServerEvent, { type: "metrics" }>): void {
   inst.setLatency({ stt_ms: m.stt_ms ?? null, llm_first_token_ms: m.llm_first_token_ms ?? null, tts_first_audio_ms: m.tts_first_audio_ms ?? null, total_ms: m.total_ms ?? null });
 }
 
+// ---- commands from the backend (voice tools, other clients) ------------------------------------
+function onCommand(ev: UiCommand): void {
+  switch (ev.action) {
+    case "show":
+      bridge.show();
+      break;
+    case "hide":
+      bridge.hide();
+      break;
+    case "mode":
+      if (ev.mode) requestMode(ev.mode);
+      break;
+    case "shutdown":
+      if (!bridge.quit()) addMsg("notice", "POWERING DOWN"); // the backend stops itself when no window is attached
+      break;
+  }
+}
+
 // ---- event routing ----------------------------------------------------------------------------
 function handle(ev: ServerEvent): void {
   switch (ev.type) {
@@ -338,7 +479,8 @@ function handle(ev: ServerEvent): void {
       userTitle = ev.user_title;
       model = ev.model;
       el.metrics.textContent = model.replace(/^ollama\//, "");
-      if (!urlMode && ev.mode) setMode(ev.mode);
+      if (ev.hotkeys) hotkeys = ev.hotkeys;
+      if (!urlMode && MODES.includes(ev.mode as Mode)) setMode(ev.mode as Mode);
       if (ev.ui) applyPrefs(ev.ui);
       el.transcript.innerHTML = ""; // history replay replaces whatever a previous connection showed
       el.tools.innerHTML = "";
@@ -406,8 +548,20 @@ function handle(ev: ServerEvent): void {
     case "metrics":
       onMetrics(ev);
       break;
+    case "ui.prefs":
+      applyPrefs(ev.prefs);
+      break;
+    case "ui.command":
+      onCommand(ev);
+      break;
   }
 }
+
+/** Tell the hub what kind of client this is (the window, or a dev browser tab) — voice shutdown defers to the window. */
+function announce(): void {
+  sock.send({ type: "client", kind: bridge.present ? "window" : "browser" });
+}
+bridge.onReady(announce);
 
 sock.on(handle);
 sock.onConnection = (up) => {
@@ -415,9 +569,11 @@ sock.onConnection = (up) => {
     el.stateText.textContent = "LINK LOST — RECONNECTING";
     el.stateDot.style.background = "var(--red)";
     scene.setState("error");
+    bridge.setState("error");
     engage();
   } else {
     el.stateDot.style.background = "";
+    announce();
   }
 };
 sock.connect();

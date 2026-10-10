@@ -3,7 +3,26 @@
 export type JarvisState = "booting" | "idle" | "listening" | "thinking" | "speaking" | "confirming" | "error";
 
 // Mirrors src/jarvis/events.py (pydantic models serialised with model_dump).
-export type UiPrefs = { idle_opacity: number; linger_s: number; widgets: boolean; cinematic_dim: number };
+export type Mode = "compact" | "panel" | "cinematic";
+export type Corner = "bottom-right" | "bottom-left" | "top-right" | "top-left";
+export type TileKind = "wave" | "spectrum" | "system" | "radar" | "clock" | "globe" | "pipeline";
+
+/** User preferences (mirrors UICfg's UI_PREF_KEYS in config.py; persisted by the backend in data/ui.json). */
+export type UiPrefs = {
+  corner: Corner;
+  idle_opacity: number;
+  linger_s: number;
+  reactor_size: number;
+  show_convo: boolean;
+  show_status: boolean;
+  auto_hide: boolean;
+  widgets: boolean;
+  tiles: Record<TileKind, boolean>;
+  cinematic_dim: number;
+  scanlines: boolean;
+};
+
+export type UiCommand = { type: "ui.command"; action: "show" | "hide" | "mode" | "shutdown"; mode: Mode | null };
 
 export type SystemStats = {
   type: "system.stats";
@@ -18,7 +37,19 @@ export type SystemStats = {
 };
 
 export type ServerEvent =
-  | { type: "hello"; state: JarvisState; model: string; user_title: string; mode: string; ui?: UiPrefs; history: ServerEvent[]; pending_confirm: { id: string; prompt: string } | null }
+  | {
+      type: "hello";
+      state: JarvisState;
+      model: string;
+      user_title: string;
+      mode: string;
+      ui?: UiPrefs;
+      hotkeys?: { text_input: string; toggle_hud: string };
+      history: ServerEvent[];
+      pending_confirm: { id: string; prompt: string } | null;
+    }
+  | { type: "ui.prefs"; prefs: UiPrefs }
+  | UiCommand
   | { type: "state"; state: JarvisState }
   | { type: "wake"; score: number }
   | { type: "transcript.partial"; text: string }
@@ -42,7 +73,9 @@ export type ClientMessage =
   | { type: "image"; text: string; image_b64: string; mime: string }
   | { type: "confirm"; id: string; accepted: boolean }
   | { type: "wake" }
-  | { type: "interrupt" };
+  | { type: "interrupt" }
+  | { type: "client"; kind: "window" | "browser" }
+  | { type: "ui.prefs"; prefs: Partial<Omit<UiPrefs, "tiles">> & { tiles?: Partial<Record<TileKind, boolean>> } };
 
 type Handler = (ev: ServerEvent) => void;
 

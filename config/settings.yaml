@@ -65,12 +65,28 @@ ui:
   hotkey_text_input: <ctrl>+<shift>+j
   hotkey_toggle_hud: <ctrl>+<shift>+h
   start_with_windows: false
+  # HUD preferences. These are the defaults; whatever you change in the HUD's own settings drawer (⚙ in panel/cinematic,
+  # or tray → Settings…) is saved to data/ui.json and overrides the values here.
   # Compact-mode attention behaviour: the reactor rests dimmed; "Hey Jarvis" brings it to full brightness and unfolds the
   # last lines of conversation beside it; linger_s after the turn it folds and dims again.
+  corner: bottom-right           # where the reactor docks: bottom-right | bottom-left | top-right | top-left
+  reactor_size: 300              # 200-400 px, compact mode
   idle_opacity: 0.55             # 0.1-1.0 brightness of the resting reactor
   linger_s: 8                    # seconds the conversation stays unfolded after Jarvis goes idle (0 = fold at once)
-  widgets: true                  # side instruments (audio, spectrum, system, clock, globe, pipeline) in panel/cinematic
+  show_convo: true               # unfold the last lines of conversation beside the reactor while engaged
+  show_status: true              # the STANDBY / LISTENING … word under the reactor
+  auto_hide: false               # hide the HUD window completely while resting; "Hey Jarvis" brings it back
+  widgets: true                  # side instruments in panel/cinematic (master switch)
+  tiles:                         # individual instruments (panel shows the first three enabled; cinematic all)
+    wave: true                   # AUDIO I/O
+    spectrum: true
+    system: true                 # CPU / MEM / VRAM gauges
+    radar: true                  # TELEMETRY
+    clock: true                  # CHRONO
+    globe: true                  # UPLINK (decoration)
+    pipeline: true               # last turn's latencies
   cinematic_dim: 0.45            # 0-0.9 how much cinematic mode darkens the desktop behind it
+  scanlines: true                # cinematic scanline overlay
 
 tools:
   everything_path: C:\Program Files\Everything\Everything.exe

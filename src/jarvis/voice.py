@@ -352,7 +352,9 @@ class VoicePipeline:
     async def confirm(self, _id: str, prompt: str) -> bool:
         """Registry confirm handler: speak the question, listen for yes/no (two attempts)."""
         for attempt in range(2):
-            self.speaker.cancel()
+            # No speaker.cancel() here: that would invalidate the turn's own Utterance (same generation), so whatever
+            # the tool/LLM says *after* the confirmation would be dropped silently and the turn would never reach its
+            # listening window (state stuck at SPEAKING). say() queues behind anything still playing anyway.
             await self.set_state(State.SPEAKING)
             await self.speaker.say(prompt if attempt == 0 else f"Sorry, {self.s.assistant.user_title} — was that a yes or a no?")
             self._drain_mic()

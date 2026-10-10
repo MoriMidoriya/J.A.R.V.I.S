@@ -4,17 +4,26 @@ Why a separate shell instead of a browser tab? The HUD should float over whateve
 with no chrome, see-through background, a tray icon and global hotkeys. QtWebEngine (Chromium) renders the exact
 same Vite build the backend serves at http://127.0.0.1:8765, so the HUD code has one implementation.
 
-Modes (settings.yaml → ui.mode, switchable from the tray menu or Ctrl+Shift+M):
-  compact   reactor in the bottom-right corner, always click-through (it never steals a click or focus). Dimmed while
-            idle; on "Hey Jarvis" it brightens and the last lines of the conversation unfold beside it, then it folds
-            and dims again `ui.linger_s` after the turn. This is the "lives on your desktop" mode.
-  panel     reactor + instruments + transcript + input, bottom-right, draggable — for reading and typing
-  cinematic full-screen overlay that dims the desktop (`ui.cinematic_dim`) — the movie takeover, on demand only
+Modes (settings.yaml → ui.mode; tray menu, Ctrl+Shift+M, the HUD's own buttons, or by voice):
+  compact   reactor docked in a corner (`ui.corner`), always click-through (it never steals a click or focus). Dimmed
+            while idle; on "Hey Jarvis" it brightens and the last lines of the conversation unfold beside it, then it
+            folds and dims again `ui.linger_s` after the turn. With `ui.auto_hide` the window disappears entirely while
+            resting. This is the "lives on your desktop" mode.
+  panel     reactor + instruments + transcript + input, docked in the same corner, draggable by its header
+  cinematic full-screen overlay that dims the desktop (`ui.cinematic_dim`) — the full interface, on demand only
 
-Hotkeys (global, via pynput):
-  ui.hotkey_text_input  (default Ctrl+Shift+J)  show the HUD and focus the text box
-  ui.hotkey_toggle_hud  (default Ctrl+Shift+H)  show / hide
-  Ctrl+Shift+M                                  cycle mode
+Switching modes is animated: the window first grows to the full screen (the page keeps the old layout anchored to the
+same corner, so nothing visibly moves), the page flies the reactor to its new place and unfolds the rest
+(hud/src/transitions.ts), and ANIM_MS later the window shrinks to the new mode's rectangle — again pixel-identical to
+what the page already shows. The Qt side therefore only ever does instant geometry changes that are invisible.
+
+Page ↔ window: the page gets `window.jarvisBridge` (QWebChannel; qwebchannel.js is injected from Qt's resources at
+document creation) with setMode / setVisible / show / hide / quit / setState / applyPrefs / beginDrag. Qt → page is
+plain runJavaScript (window.setMode / switchMode / focusInput / openSettings).
+
+Hiding: Ctrl+Shift+H, the tray, the settings drawer or "hide yourself" hide the window *explicitly* — it stays hidden
+(voice still works; the tray icon shows the state) until shown the same ways. `ui.auto_hide` hides it only while
+resting and lets "Hey Jarvis" bring it back. The explicit hide always wins.
 
 Processes: Qt owns this process's main thread; the voice backend is a *child process* started by `ui.launcher` (see
 app.main and D18) and this window is just one more WebSocket client of it. Hotkey callbacks arrive on pynput's thread
@@ -24,35 +33,50 @@ and are marshalled to Qt via a queued Signal.
 from __future__ import annotations
 
 import ctypes
+import json
 import signal
 import sys
 import time
 from collections.abc import Callable
-from typing import Literal
+from typing import Any, Literal
 
 from loguru import logger
-from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QFile, QIODevice, QObject, QRect, Qt, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPen, QPixmap, QSurfaceFormat
-from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
+from PySide6.QtWebChannel import QWebChannel
+from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineScript, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
 
-from jarvis.config import Settings
+from jarvis.config import Corner, Settings
 
 Mode = Literal["compact", "panel", "cinematic"]
 MODES: tuple[Mode, ...] = ("compact", "panel", "cinematic")
-# compact: the reactor itself is ~300 px in the bottom-right corner of this (transparent, click-through) window; the
-# rest of the area is where the last lines of conversation unfold while Jarvis is engaged (see hud/src/main.ts).
+# compact: the reactor itself is ≤400 px in the docked corner of this (transparent, click-through) window; the rest of
+# the area is where the last lines of conversation unfold while Jarvis is engaged (see hud/src/main.ts).
 SIZES: dict[Mode, tuple[int, int]] = {"compact": (720, 560), "panel": (560, 860)}
-MARGIN = 24
+MARGIN = 24  # distance from the screen edges; the page gets it as ?margin= so its docked layout matches exactly
+ANIM_MS = 1250  # ≥ the page's whole switch animation (hud/src/transitions.ts: out 240 + flip 620 + staggered reveal)
 
-# Win32 extended window styles for click-through
+STATE_COLOR = {
+    "booting": "#2a86a8",
+    "idle": "#34e4f5",
+    "listening": "#ffb648",
+    "thinking": "#c6ecff",
+    "speaking": "#34e4f5",
+    "confirming": "#ffb648",
+    "error": "#ff5a5a",
+}
+
+# Win32
 GWL_EXSTYLE = -20
 WS_EX_TRANSPARENT = 0x00000020
 WS_EX_LAYERED = 0x00080000
+WM_NCLBUTTONDOWN = 0x00A1
+HTCAPTION = 2
 
 
-def _reactor_icon(color: str = "#38e8ff") -> QIcon:
+def _reactor_icon(color: str = "#34e4f5") -> QIcon:
     """Draw a tiny arc-reactor as the tray icon (no asset files needed)."""
     pm = QPixmap(64, 64)
     pm.fill(Qt.GlobalColor.transparent)
@@ -78,11 +102,63 @@ class _Page(QWebEnginePage):
         logger.debug("hud js: {} ({}:{})", message, source.rsplit("/", 1)[-1], line)
 
 
+class HudBridge(QObject):
+    """What the page sees as `window.jarvisBridge`. Every slot hops back onto the window object."""
+
+    def __init__(self, win: HudWindow) -> None:
+        super().__init__(win)
+        self.win = win
+
+    @Slot(str)
+    def setMode(self, mode: str) -> None:
+        if mode in MODES:
+            self.win.switch_mode(mode)  # type: ignore[arg-type]
+
+    @Slot(bool)
+    def setVisible(self, visible: bool) -> None:  # the page's attention logic (ui.auto_hide)
+        self.win.auto_visible(visible)
+
+    @Slot()
+    def show(self) -> None:
+        self.win.set_hidden(False)
+
+    @Slot()
+    def hide(self) -> None:
+        self.win.set_hidden(True)
+
+    @Slot()
+    def quit(self) -> None:
+        self.win.quit()
+
+    @Slot(str)
+    def setState(self, state: str) -> None:
+        self.win.set_state(state)
+
+    @Slot(str)
+    def applyPrefs(self, prefs_json: str) -> None:
+        try:
+            self.win.apply_prefs(json.loads(prefs_json))
+        except ValueError as e:
+            logger.debug("bad prefs from page: {}", e)
+
+    @Slot()
+    def beginDrag(self) -> None:  # panel header: let Windows move the window as if its title bar were dragged
+        self.win.begin_drag()
+
+
 class HudWindow(QWidget):
     def __init__(self, settings: Settings) -> None:
         super().__init__()
         self.s = settings
         self.mode: Mode = settings.ui.mode
+        self.corner: Corner = settings.ui.corner
+        self.auto_hide = settings.ui.auto_hide
+        self.user_hidden = False  # explicit hide (hotkey / tray / voice / settings) — sticky
+        self.auto_hidden = False  # the page asked us to hide while resting (ui.auto_hide)
+        self.state = "booting"
+        self._page_ready = False
+        self._switch_token = 0
+        self._icons: dict[str, QIcon] = {}
         self.url = f"http://{settings.ui.host}:{settings.ui.port}/"
         self.setWindowTitle("J.A.R.V.I.S.")
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
@@ -91,34 +167,95 @@ class HudWindow(QWidget):
 
         self.view = QWebEngineView(self)
         self.view.setPage(_Page(self.view))
-        self.view.page().setBackgroundColor(Qt.GlobalColor.transparent)
+        page = self.view.page()
+        page.setBackgroundColor(Qt.GlobalColor.transparent)
         st = self.view.settings()
         st.setAttribute(QWebEngineSettings.WebAttribute.ShowScrollBars, False)
         st.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
         self.view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.view.setStyleSheet("background: transparent")
+        self._install_bridge(page)
         self._load_when_up()
 
         self.signals = _Signals()
         self.signals.hotkey.connect(self._on_hotkey)
         self._tray()
         self._hotkeys()
-        self.apply_mode(self.mode)
-        self._drag_pos = None
+        self.setGeometry(self._rect_for(self.mode))
+        self._set_click_through(self.mode == "compact")
+        logger.info("HUD mode: {} ({} corner)", self.mode, self.corner)
 
-    # ---- layout ----------------------------------------------------------------------------------
-    def apply_mode(self, mode: Mode) -> None:
-        self.mode = mode
-        screen = QApplication.primaryScreen().availableGeometry()
+    # ---- page bridge -----------------------------------------------------------------------------
+    def _install_bridge(self, page: QWebEnginePage) -> None:
+        """QWebChannel: qwebchannel.js (from Qt's own resources) + a bootstrap that publishes window.jarvisBridge."""
+        f = QFile(":/qtwebchannel/qwebchannel.js")
+        if not f.open(QIODevice.OpenModeFlag.ReadOnly):
+            logger.warning("qwebchannel.js not found in Qt resources; the HUD cannot talk back to the window")
+            return
+        src = bytes(f.readAll()).decode("utf-8") + (
+            "\n;(function(){ if (!window.qt || !qt.webChannelTransport) return;"
+            " new QWebChannel(qt.webChannelTransport, function(ch){ window.jarvisBridge = ch.objects.bridge;"
+            " document.dispatchEvent(new CustomEvent('jarvis-bridge')); }); })();"
+        )
+        script = QWebEngineScript()
+        script.setName("jarvis-bridge")
+        script.setSourceCode(src)
+        script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
+        script.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
+        script.setRunsOnSubFrames(False)
+        page.scripts().insert(script)
+        self.bridge = HudBridge(self)
+        self.channel = QWebChannel(page)
+        self.channel.registerObject("bridge", self.bridge)
+        page.setWebChannel(self.channel)
+
+    def _js(self, code: str) -> None:
+        self.view.page().runJavaScript(code)
+
+    # ---- geometry --------------------------------------------------------------------------------
+    def _screen(self) -> QRect:
+        return QApplication.primaryScreen().availableGeometry()
+
+    def _rect_for(self, mode: Mode) -> QRect:
+        screen = self._screen()
         if mode == "cinematic":
-            self.setGeometry(screen)
-        else:
-            w, h = SIZES[mode]
-            self.setGeometry(screen.right() - w - MARGIN, screen.bottom() - h - MARGIN, w, h)
-        self.view.setGeometry(self.rect())
-        self.view.page().runJavaScript(f"window.setMode && window.setMode('{mode}')")
+            return screen
+        w, h = SIZES[mode]
+        x = screen.x() + screen.width() - w - MARGIN if self.corner.endswith("right") else screen.x() + MARGIN
+        y = screen.y() + screen.height() - h - MARGIN if self.corner.startswith("bottom") else screen.y() + MARGIN
+        return QRect(x, y, w, h)
+
+    def switch_mode(self, mode: Mode, animate: bool = True) -> None:
+        """Change layout mode. Animated (see module docstring) unless the window is hidden or the page isn't up yet."""
+        if mode == self.mode:
+            return
+        old, self.mode = self.mode, mode
+        for act in self.mode_actions:
+            act.setChecked(act.text().lower() == mode)
+        self._switch_token += 1
+        token = self._switch_token
+        target = self._rect_for(mode)
         self._set_click_through(mode == "compact")
-        logger.info("HUD mode: {}", mode)
+        if mode != "compact" and self.auto_hidden:  # only the resting compact HUD is ever auto-hidden
+            self.auto_hidden = False
+            self._apply_visibility()
+        if not animate or not self._page_ready or not self.isVisible():
+            self.setGeometry(target)
+            self._js(f"window.setMode && window.setMode('{mode}')")
+        else:
+            self.setGeometry(self._screen())  # the page's docked layout stays put at this size → invisible step
+            self._js(f"window.switchMode && window.switchMode('{mode}', '{old}')")
+            if mode != "cinematic":
+                QTimer.singleShot(ANIM_MS, lambda: self._settle(mode, token))
+        if mode != "compact":
+            self.raise_()
+            self.activateWindow()
+        logger.info("HUD mode: {} → {}", old, mode)
+
+    def _settle(self, mode: Mode, token: int) -> None:
+        """End of a switch animation: shrink the window to the mode's rectangle (pixel-identical to the page's layout)."""
+        if token == self._switch_token and self.mode == mode:
+            self.setGeometry(self._rect_for(mode))
 
     def resizeEvent(self, e) -> None:
         self.view.setGeometry(self.rect())
@@ -134,28 +271,102 @@ class HudWindow(QWidget):
         ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, on)
 
+    def begin_drag(self) -> None:
+        if sys.platform != "win32" or self.mode != "panel":
+            return
+        ctypes.windll.user32.ReleaseCapture()
+        ctypes.windll.user32.SendMessageW(int(self.winId()), WM_NCLBUTTONDOWN, HTCAPTION, 0)
+
+    # ---- visibility ------------------------------------------------------------------------------
+    def set_hidden(self, hidden: bool) -> None:
+        """Explicit hide/show (hotkey, tray, settings, voice). Showing also clears a pending auto-hide."""
+        self.user_hidden = hidden
+        if not hidden:
+            self.auto_hidden = False
+        self._apply_visibility()
+
+    def auto_visible(self, visible: bool) -> None:
+        """The page's attention logic: hide while resting / show when engaged (only if ui.auto_hide is on)."""
+        if not self.auto_hide and not visible:
+            return
+        self.auto_hidden = not visible
+        self._apply_visibility()
+
+    def toggle(self) -> None:
+        self.set_hidden(self.isVisible())
+
+    def _apply_visibility(self) -> None:
+        want = not (self.user_hidden or self.auto_hidden)
+        if want and not self.isVisible():
+            self.show()
+            if self.mode != "compact":
+                self.raise_()
+            logger.debug("HUD shown")
+        elif not want and self.isVisible():
+            self.hide()
+            logger.debug("HUD hidden ({})", "explicit" if self.user_hidden else "auto-hide while resting")
+        self.act_toggle.setText("Show HUD" if self.user_hidden else "Hide HUD")
+
+    # ---- state / prefs from the page -------------------------------------------------------------
+    def set_state(self, state: str) -> None:
+        self.state = state
+        color = STATE_COLOR.get(state, STATE_COLOR["idle"])
+        if color not in self._icons:
+            self._icons[color] = _reactor_icon(color)
+        self.tray.setIcon(self._icons[color])
+        label = {"idle": "standby", "thinking": "processing", "confirming": "awaiting confirmation"}.get(state, state)
+        self.tray.setToolTip(f"J.A.R.V.I.S. — {label}" + ("  (HUD hidden)" if self.user_hidden else ""))
+
+    def apply_prefs(self, prefs: dict[str, Any]) -> None:
+        corner = prefs.get("corner")
+        if corner in ("bottom-right", "bottom-left", "top-right", "top-left") and corner != self.corner:
+            self.corner = corner
+            if self.mode != "cinematic":
+                self.setGeometry(self._rect_for(self.mode))
+            logger.info("HUD corner: {}", corner)
+        if "auto_hide" in prefs:
+            self.auto_hide = bool(prefs["auto_hide"])
+            if not self.auto_hide and self.auto_hidden:
+                self.auto_hidden = False
+                self._apply_visibility()
+
+    def quit(self) -> None:
+        logger.info("quit requested from the HUD")
+        QApplication.instance().quit()
+
     # ---- loading ---------------------------------------------------------------------------------
+    def _page_url(self) -> QUrl:
+        return QUrl(f"{self.url}?mode={self.mode}&corner={self.corner}&margin={MARGIN}")
+
     def _load_when_up(self) -> None:
         """The backend may still be starting; retry the URL until the server answers."""
-        self.view.load(QUrl(f"{self.url}?mode={self.mode}"))
+        self.view.load(self._page_url())
         self.view.loadFinished.connect(self._loaded)
 
     def _loaded(self, ok: bool) -> None:
+        self._page_ready = ok
         if ok:
             return
-        QTimer.singleShot(700, lambda: self.view.load(QUrl(f"{self.url}?mode={self.mode}")))
+        QTimer.singleShot(700, lambda: self.view.load(self._page_url()))
 
     # ---- tray ------------------------------------------------------------------------------------
     def _tray(self) -> None:
         self.tray = QSystemTrayIcon(_reactor_icon(), self)
-        self.tray.setToolTip("J.A.R.V.I.S.")
+        self.tray.setToolTip("J.A.R.V.I.S. — booting")
         menu = QMenu()
-        self.act_toggle = QAction("Hide HUD", menu)
+        hk = lambda s: s.replace("<", "").replace(">", "").title()
+        self.act_toggle = QAction(f"Hide HUD  ({hk(self.s.ui.hotkey_toggle_hud)})", menu)
         self.act_toggle.triggered.connect(self.toggle)
         menu.addAction(self.act_toggle)
-        a = QAction(f"Type a command  ({self.s.ui.hotkey_text_input.replace('<', '').replace('>', '').title()})", menu)
+        a = QAction(f"Type a command  ({hk(self.s.ui.hotkey_text_input)})", menu)
         a.triggered.connect(self.focus_input)
         menu.addAction(a)
+        f = QAction("Full interface  (Ctrl+Shift+M)", menu)
+        f.triggered.connect(lambda: self._on_hotkey("mode"))
+        menu.addAction(f)
+        st = QAction("Settings…", menu)
+        st.triggered.connect(self.open_settings)
+        menu.addAction(st)
         menu.addSeparator()
         mode_menu = menu.addMenu("Mode")
         for m in MODES:
@@ -165,38 +376,36 @@ class HudWindow(QWidget):
             mode_menu.addAction(act)
         self.mode_actions = mode_menu.actions()
         r = QAction("Reload HUD", menu)
-        r.triggered.connect(lambda: self.view.load(QUrl(f"{self.url}?mode={self.mode}")))
+        r.triggered.connect(lambda: self.view.load(self._page_url()))
         menu.addAction(r)
         menu.addSeparator()
-        q = QAction("Quit J.A.R.V.I.S.", menu)
-        q.triggered.connect(QApplication.instance().quit)
+        q = QAction("Shut down J.A.R.V.I.S.", menu)
+        q.triggered.connect(self.quit)
         menu.addAction(q)
         self.tray.setContextMenu(menu)
         self.tray.activated.connect(lambda r: self.toggle() if r == QSystemTrayIcon.ActivationReason.Trigger else None)
         self.tray.show()
 
     def _choose_mode(self, m: Mode) -> None:
-        for act in self.mode_actions:
-            act.setChecked(act.text().lower() == m)
-        self.apply_mode(m)
-        self.show()
+        self.set_hidden(False)
+        self.switch_mode(m)
 
-    def toggle(self) -> None:
-        if self.isVisible():
-            self.hide()
-            self.act_toggle.setText("Show HUD")
-        else:
-            self.show()
-            self.act_toggle.setText("Hide HUD")
+    def open_settings(self) -> None:
+        self.set_hidden(False)
+        if self.mode == "compact":
+            self.switch_mode("panel")
+        self.raise_()
+        self.activateWindow()
+        self._js("window.openSettings && window.openSettings()")
 
     def focus_input(self) -> None:
+        self.set_hidden(False)
         if self.mode == "compact":
-            self._choose_mode("panel")
-        self.show()
+            self.switch_mode("panel")
         self.raise_()
         self.activateWindow()
         self.view.setFocus()
-        self.view.page().runJavaScript("window.focusInput && window.focusInput()")
+        self._js("window.focusInput && window.focusInput()")
 
     # ---- global hotkeys ---------------------------------------------------------------------------
     def _hotkeys(self) -> None:
@@ -213,27 +422,16 @@ class HudWindow(QWidget):
         self._hk = keyboard.GlobalHotKeys(combos)
         self._hk.daemon = True
         self._hk.start()
-        logger.info("hotkeys: {} = type, {} = toggle HUD, ctrl+shift+m = mode", self.s.ui.hotkey_text_input, self.s.ui.hotkey_toggle_hud)
+        logger.info("hotkeys: {} = type, {} = hide/show HUD, ctrl+shift+m = full interface", self.s.ui.hotkey_text_input, self.s.ui.hotkey_toggle_hud)
 
     def _on_hotkey(self, what: str) -> None:
         if what == "input":
             self.focus_input()
         elif what == "toggle":
             self.toggle()
-        elif what == "mode":
-            self._choose_mode(MODES[(MODES.index(self.mode) + 1) % len(MODES)])
-
-    # ---- drag to move (panel mode) -----------------------------------------------------------------
-    def mousePressEvent(self, e) -> None:
-        if e.button() == Qt.MouseButton.LeftButton:
-            self._drag_pos = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
-
-    def mouseMoveEvent(self, e) -> None:
-        if self._drag_pos is not None and e.buttons() & Qt.MouseButton.LeftButton:
-            self.move(e.globalPosition().toPoint() - self._drag_pos)
-
-    def mouseReleaseEvent(self, e) -> None:
-        self._drag_pos = None
+        elif what == "mode":  # HUD ⇄ full interface (panel counts as "not full")
+            self.set_hidden(False)
+            self.switch_mode("compact" if self.mode == "cinematic" else "cinematic")
 
 
 def run_window(settings: Settings, on_tick: Callable[[], None] | None = None) -> int:
